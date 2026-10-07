@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState } from 'react'
 import { Dumbbell, History, Pencil, Settings, Trash2 } from 'lucide-react'
 import { db, seedDatabase } from './db'
 import HistoryView from './components/HistoryView'
+import ExercisePoolModal from './components/ExercisePoolModal'
+import ManageModal from './components/ManageModal'
 import {
   calculate1RM,
   getSetRecommendation,
@@ -19,6 +21,20 @@ function startOfDay(timestamp = Date.now()) {
 
 function startOfToday() {
   return startOfDay()
+}
+
+// Baştaki gereksiz sıfırları temizler: '025' -> '25', '0.5' korunur
+function stripLeadingZeros(raw) {
+  const [intPart, ...rest] = raw.split('.')
+  const cleanInt = intPart.replace(/^0+(?=\d)/, '')
+  return rest.length ? `${cleanInt}.${rest.join('')}` : cleanInt
+}
+
+// Input'un gösterilen değerini temizler ve sayı olarak döndürür
+function readNumberInput(e, min = 0) {
+  const cleaned = stripLeadingZeros(e.target.value)
+  if (cleaned !== e.target.value) e.target.value = cleaned
+  return Math.max(min, Number(cleaned) || min)
 }
 
 function getPreviousSessionSets(history) {
@@ -73,6 +89,8 @@ export default function App() {
   const [previousSets, setPreviousSets] = useState([])
   const [saving, setSaving] = useState(false)
   const [editingSetId, setEditingSetId] = useState(null)
+  // null | 'routine-add' | 'routine-manage' | 'exercise-add' | 'exercise-manage'
+  const [modal, setModal] = useState(null)
 
   const selectedExercise = exercises.find((ex) => ex.id === exerciseId)
   const visibleExercises = exercises.filter((ex) => ex.routineId === routineId)
@@ -147,24 +165,32 @@ export default function App() {
     await handleExerciseChange(firstId)
   }
 
-  async function handleAddRoutine() {
-    const name = window.prompt('Yeni antrenman günü adı:')?.trim()
-    if (!name) return
+  function handleAddRoutine() {
+    setModal('routine-add')
+  }
+
+  function handleAddExercise() {
+    if (routineId) setModal('exercise-add')
+  }
+
+  function handleManageRoutine() {
+    if (routineId) setModal('routine-manage')
+  }
+
+  function handleManageExercise() {
+    if (selectedExercise) setModal('exercise-manage')
+  }
+
+  async function submitAddRoutine(name) {
     const id = await db.routines.add({ name })
     setRoutines(await db.routines.toArray())
     await handleRoutineChange(id)
   }
 
-  async function handleAddExercise() {
-    if (!routineId) {
-      window.alert('Önce bir antrenman günü seçin veya ekleyin.')
-      return
-    }
-    const name = window.prompt('Yeni hareket adı:')?.trim()
-    if (!name) return
+  async function submitAddExercise(name, targetMuscle = 'Genel') {
     const id = await db.exercises.add({
       name,
-      targetMuscle: 'Genel',
+      targetMuscle,
       equipmentType: 'other',
       incrementStep: 2.5,
       routineId,
@@ -174,52 +200,38 @@ export default function App() {
     await handleExerciseChange(id, list)
   }
 
-  async function handleManageRoutine() {
-    const routine = routines.find((r) => r.id === routineId)
-    if (!routine) return
-
-    const choice = window.prompt(`"${routine.name}" günü:\n1- Adını Değiştir\n2- Sil`)?.trim()
-
-    if (choice === '1') {
-      const name = window.prompt('Yeni gün adı:', routine.name)?.trim()
-      if (!name) return
-      await db.routines.update(routine.id, { name })
-      setRoutines(await db.routines.toArray())
-    } else if (choice === '2') {
-      // Güne bağlı hareketler de silinir (set kayıtları geçmişte korunur)
-      await db.exercises.where('routineId').equals(routine.id).delete()
-      await db.routines.delete(routine.id)
-      const routineList = await db.routines.toArray()
-      const list = await db.exercises.toArray()
-      setRoutines(routineList)
-      setExercises(list)
-      const nextRoutineId = routineList[0]?.id ?? null
-      setRoutineId(nextRoutineId)
-      const nextExerciseId = list.find((ex) => ex.routineId === nextRoutineId)?.id ?? null
-      await handleExerciseChange(nextExerciseId, list)
-    }
+  async function submitRenameRoutine(name) {
+    await db.routines.update(routineId, { name })
+    setRoutines(await db.routines.toArray())
   }
 
-  async function handleManageExercise() {
-    if (!selectedExercise) return
-
-    const choice = window
-      .prompt(`"${selectedExercise.name}" hareketi:\n1- Adını Değiştir\n2- Sil`)
-      ?.trim()
-
-    if (choice === '1') {
-      const name = window.prompt('Yeni hareket adı:', selectedExercise.name)?.trim()
-      if (!name) return
-      await db.exercises.update(selectedExercise.id, { name })
-      setExercises(await db.exercises.toArray())
-    } else if (choice === '2') {
-      await db.exercises.delete(selectedExercise.id)
-      const list = await db.exercises.toArray()
-      setExercises(list)
-      const nextId = list.find((ex) => ex.routineId === routineId)?.id ?? null
-      await handleExerciseChange(nextId, list)
-    }
+  async function submitRenameExercise(name) {
+    await db.exercises.update(exerciseId, { name })
+    setExercises(await db.exercises.toArray())
   }
+
+  async function deleteRoutine() {
+    // Güne bağlı hareketler de silinir (set kayıtları geçmişte korunur)
+    await db.exercises.where('routineId').equals(routineId).delete()
+    await db.routines.delete(routineId)
+    const routineList = await db.routines.toArray()
+    const list = await db.exercises.toArray()
+    setRoutines(routineList)
+    setExercises(list)
+    const nextRoutineId = routineList[0]?.id ?? null
+    setRoutineId(nextRoutineId)
+    const nextExerciseId = list.find((ex) => ex.routineId === nextRoutineId)?.id ?? null
+    await handleExerciseChange(nextExerciseId, list)
+  }
+
+  async function deleteExercise() {
+    await db.exercises.delete(exerciseId)
+    const list = await db.exercises.toArray()
+    setExercises(list)
+    const nextId = list.find((ex) => ex.routineId === routineId)?.id ?? null
+    await handleExerciseChange(nextId, list)
+  }
+
 
   async function handleSaveSet() {
     if (!exerciseId || saving) return
@@ -377,7 +389,8 @@ export default function App() {
           <button
             type="button"
             onClick={handleAddExercise}
-            className="h-10 flex-1 rounded-xl bg-slate-800 text-sm font-semibold text-slate-200 active:bg-slate-700"
+            disabled={!routineId}
+            className="h-10 flex-1 rounded-xl bg-slate-800 text-sm font-semibold text-slate-200 active:bg-slate-700 disabled:opacity-40"
           >
             + Hareket Ekle
           </button>
@@ -429,7 +442,8 @@ export default function App() {
               type="number"
               inputMode="decimal"
               value={weight}
-              onChange={(e) => setWeight(Number(e.target.value) || 0)}
+              onFocus={(e) => e.target.select()}
+              onChange={(e) => setWeight(readNumberInput(e, 0))}
               className="h-16 w-24 rounded-2xl border border-slate-800 bg-slate-900 text-center text-2xl font-bold text-white outline-none ring-emerald-500 focus:ring-2"
             />
             <button
@@ -456,7 +470,8 @@ export default function App() {
               type="number"
               inputMode="numeric"
               value={reps}
-              onChange={(e) => setReps(Math.max(1, Number(e.target.value) || 1))}
+              onFocus={(e) => e.target.select()}
+              onChange={(e) => setReps(readNumberInput(e, 1))}
               className="h-16 w-24 rounded-2xl border border-slate-800 bg-slate-900 text-center text-2xl font-bold text-white outline-none ring-emerald-500 focus:ring-2"
             />
             <button
@@ -485,7 +500,8 @@ export default function App() {
               min={0}
               max={10}
               value={rir}
-              onChange={(e) => setRir(Math.max(0, Number(e.target.value) || 0))}
+              onFocus={(e) => e.target.select()}
+              onChange={(e) => setRir(readNumberInput(e, 0))}
               className="h-16 w-24 rounded-2xl border border-slate-800 bg-slate-900 text-center text-2xl font-bold text-white outline-none ring-emerald-500 focus:ring-2"
             />
             <button
@@ -597,6 +613,51 @@ export default function App() {
           ))}
         </div>
       </nav>
+
+      {modal === 'routine-add' && (
+        <ManageModal
+          title="Yeni Antrenman Günü"
+          inputLabel="Gün adı"
+          startMode="input"
+          submitLabel="Ekle"
+          onSubmit={submitAddRoutine}
+          onClose={() => setModal(null)}
+        />
+      )}
+      {modal === 'exercise-add' && (
+        <ExercisePoolModal
+          routineName={routines.find((r) => r.id === routineId)?.name}
+          existingNames={visibleExercises.map((ex) => ex.name)}
+          onAdd={submitAddExercise}
+          onClose={() => setModal(null)}
+        />
+      )}
+      {modal === 'routine-manage' && (
+        <ManageModal
+          title="Antrenman Gününü Yönet"
+          subtitle={routines.find((r) => r.id === routineId)?.name}
+          inputLabel="Gün adı"
+          initialValue={routines.find((r) => r.id === routineId)?.name ?? ''}
+          canDelete
+          deleteWarning="Bu gün ve güne bağlı tüm hareketler silinecek. Geçmiş set kayıtları korunur."
+          onSubmit={submitRenameRoutine}
+          onDelete={deleteRoutine}
+          onClose={() => setModal(null)}
+        />
+      )}
+      {modal === 'exercise-manage' && selectedExercise && (
+        <ManageModal
+          title="Hareketi Yönet"
+          subtitle={selectedExercise.name}
+          inputLabel="Hareket adı"
+          initialValue={selectedExercise.name}
+          canDelete
+          deleteWarning="Bu hareket silinecek. Geçmiş set kayıtları korunur."
+          onSubmit={submitRenameExercise}
+          onDelete={deleteExercise}
+          onClose={() => setModal(null)}
+        />
+      )}
     </div>
   )
 }

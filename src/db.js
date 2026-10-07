@@ -45,13 +45,14 @@ const DEFAULT_SPLIT = {
 
 async function seedDatabaseOnce() {
   await db.transaction('rw', db.routines, db.exercises, async () => {
-    // Çift kayıtları temizle
+    // Çift kayıtları temizle (aynı gün içinde aynı isim; farklı günlerde aynı hareket serbest)
     const all = await db.exercises.toArray();
     const seen = new Set();
     const duplicateIds = [];
     for (const exercise of all) {
-      if (seen.has(exercise.name)) duplicateIds.push(exercise.id);
-      else seen.add(exercise.name);
+      const key = `${exercise.routineId ?? ''}|${exercise.name}`;
+      if (seen.has(key)) duplicateIds.push(exercise.id);
+      else seen.add(key);
     }
     if (duplicateIds.length) await db.exercises.bulkDelete(duplicateIds);
 
