@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Dumbbell, History, Pencil, Settings, Trash2 } from 'lucide-react'
 import { db, seedDatabase } from './db'
 import HistoryView from './components/HistoryView'
@@ -10,7 +10,11 @@ import {
 } from './utils/progressionEngine'
 
 function todayDateString() {
-  return new Date().toISOString().slice(0, 10)
+  const date = new Date()
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
 }
 
 function startOfDay(timestamp = Date.now()) {
@@ -23,18 +27,8 @@ function startOfToday() {
   return startOfDay()
 }
 
-// Baştaki gereksiz sıfırları temizler: '025' -> '25', '0.5' korunur
-function stripLeadingZeros(raw) {
-  const [intPart, ...rest] = raw.split('.')
-  const cleanInt = intPart.replace(/^0+(?=\d)/, '')
-  return rest.length ? `${cleanInt}.${rest.join('')}` : cleanInt
-}
-
-// Input'un gösterilen değerini temizler ve sayı olarak döndürür
-function readNumberInput(e, min = 0) {
-  const cleaned = stripLeadingZeros(e.target.value)
-  if (cleaned !== e.target.value) e.target.value = cleaned
-  return Math.max(min, Number(cleaned) || min)
+function estimate1RMOrNull(load, repCount) {
+  return repCount <= 12 ? Number(calculate1RM(load, repCount).toFixed(1)) : null
 }
 
 function getPreviousSessionSets(history) {
@@ -59,20 +53,6 @@ function getPreviousSessionSets(history) {
   })
 }
 
-async function getOrCreateTodayWorkout() {
-  const date = todayDateString()
-  let workout = await db.workouts.where('date').equals(date).first()
-  if (!workout) {
-    const id = await db.workouts.add({
-      date,
-      name: 'Antrenman',
-      isCompleted: false,
-    })
-    workout = { id, date, name: 'Antrenman', isCompleted: false }
-  }
-  return workout
-}
-
 export default function App() {
   const [activeTab, setActiveTab] = useState('workout')
   const [routines, setRoutines] = useState([])
@@ -88,7 +68,9 @@ export default function App() {
   const [todaySets, setTodaySets] = useState([])
   const [previousSets, setPreviousSets] = useState([])
   const [saving, setSaving] = useState(false)
+  const [storageError, setStorageError] = useState('')
   const [editingSetId, setEditingSetId] = useState(null)
+  const loadRequestId = useRef(0)
   // null | 'routine-add' | 'routine-manage' | 'exercise-add' | 'exercise-manage'
   const [modal, setModal] = useState(null)
 
@@ -96,6 +78,7 @@ export default function App() {
   const visibleExercises = exercises.filter((ex) => ex.routineId === routineId)
 
   const loadExerciseData = useCallback(async (id, list, { prefill = false } = {}) => {
+    const requestId = ++loadRequestId.current
     if (!id) {
       setPreviousSets([])
       setTodaySets([])
@@ -103,26 +86,29 @@ export default function App() {
       return
     }
 
-    const history = await db.sets.where('exerciseId').equals(id).sortBy('timestamp')
-    const from = startOfToday()
-    const today = history.filter((set) => set.timestamp >= from)
-    const previous = getPreviousSessionSets(history)
+    try {
+      const history = await db.sets.where('exerciseId').equals(id).sortBy('timestamp')
+      if (requestId !== loadRequestId.current) return
+      const from = startOfToday()
+      const today = history.filter((set) => set.timestamp >= from)
+      const previous = getPreviousSessionSets(history)
 
-    setTodaySets(today)
-    setPreviousSets(previous)
+      setTodaySets(today)
+      setPreviousSets(previous)
 
-    const nextSetNumber = today.length + 1
-    const matchingPrevious =
-      previous.find((set) => set.setNumber === nextSetNumber) ??
-      previous[previous.length - 1] ??
-      null
-    const step = list?.find((ex) => ex.id === id)?.incrementStep ?? 2.5
-    setRecommendation(getSetRecommendation(matchingPrevious, step))
+      const step = list?.find((ex) => ex.id === id)?.incrementStep ?? 2.5
+      setRecommendation(getSetRecommendation(previous, step))
 
-    if (prefill && matchingPrevious) {
-      setWeight(matchingPrevious.weight)
-      setReps(matchingPrevious.reps)
-      setRir(typeof matchingPrevious.rir === 'number' ? matchingPrevious.rir : 2)
+      const matchingPrevious = previous[previous.length - 1]
+      if (prefill && matchingPrevious) {
+        setWeight(matchingPrevious.weight)
+        setReps(matchingPrevious.reps)
+        setRir(typeof matchingPrevious.rir === 'number' ? matchingPrevious.rir : 2)
+      }
+    } catch (error) {
+      if (requestId === loadRequestId.current) {
+        setStorageError(`Antrenman verisi yüklenemedi: ${error.message}`)
+      }
     }
   }, [])
 
@@ -130,18 +116,22 @@ export default function App() {
     let cancelled = false
 
     async function boot() {
-      await seedDatabase()
-      const routineList = await db.routines.toArray()
-      const list = await db.exercises.toArray()
-      if (cancelled) return
+      try {
+        await seedDatabase()
+        const routineList = await db.routines.toArray()
+        const list = await db.exercises.toArray()
+        if (cancelled) return
 
-      setRoutines(routineList)
-      setExercises(list)
-      const firstRoutineId = routineList[0]?.id ?? null
-      setRoutineId(firstRoutineId)
-      const firstId = list.find((ex) => ex.routineId === firstRoutineId)?.id ?? null
-      setExerciseId(firstId)
-      await loadExerciseData(firstId, list, { prefill: true })
+        setRoutines(routineList)
+        setExercises(list)
+        const firstRoutineId = routineList[0]?.id ?? null
+        setRoutineId(firstRoutineId)
+        const firstId = list.find((ex) => ex.routineId === firstRoutineId)?.id ?? null
+        setExerciseId(firstId)
+        await loadExerciseData(firstId, list, { prefill: true })
+      } catch (error) {
+        if (!cancelled) setStorageError(`Uygulama verisi yüklenemedi: ${error.message}`)
+      }
     }
 
     boot()
@@ -236,50 +226,79 @@ export default function App() {
   async function handleSaveSet() {
     if (!exerciseId || saving) return
 
+    const load = Number(weight)
+    const repCount = Number(reps)
+    const rirCount = Number(rir)
+    if (!Number.isFinite(load) || load < 0) {
+      setStorageError('Ağırlık sıfır veya daha büyük bir sayı olmalıdır.')
+      return
+    }
+    if (!Number.isInteger(repCount) || repCount < 1 || repCount > 100) {
+      setStorageError('Tekrar 1–100 arasında tam sayı olmalıdır.')
+      return
+    }
+    if (!Number.isInteger(rirCount) || rirCount < 0 || rirCount > 10) {
+      setStorageError('RIR 0–10 arasında tam sayı olmalıdır.')
+      return
+    }
+
     setSaving(true)
+    setStorageError('')
     try {
       if (editingSetId != null) {
         await db.sets.update(editingSetId, {
-          weight,
-          reps,
-          rir,
-          estimated1RM: Number(calculate1RM(weight, reps).toFixed(1)),
+          weight: load,
+          reps: repCount,
+          rir: rirCount,
+          estimated1RM: estimate1RMOrNull(load, repCount),
         })
         setEditingSetId(null)
         await loadExerciseData(exerciseId, exercises)
         return
       }
 
-      const workout = await getOrCreateTodayWorkout()
-      const existing = await db.sets
-        .where('exerciseId')
-        .equals(exerciseId)
-        .and((set) => set.workoutId === workout.id)
-        .toArray()
-      const nextSetNumber =
-        existing.reduce((max, set) => Math.max(max, set.setNumber ?? 0), 0) + 1
+      const date = todayDateString()
+      await db.transaction('rw', db.workouts, db.sets, async () => {
+        let workout = await db.workouts.where('date').equals(date).first()
+        if (!workout) {
+          const id = await db.workouts.add({ date, name: 'Antrenman', isCompleted: false })
+          workout = { id }
+        }
 
-      await db.sets.add({
-        workoutId: workout.id,
-        exerciseId,
-        setNumber: nextSetNumber,
-        weight,
-        reps,
-        rir,
-        estimated1RM: Number(calculate1RM(weight, reps).toFixed(1)),
-        timestamp: Date.now(),
+        const existing = await db.sets.where('exerciseId').equals(exerciseId)
+          .and((set) => set.workoutId === workout.id).toArray()
+        const nextSetNumber = existing.reduce(
+          (max, set) => Math.max(max, set.setNumber ?? 0), 0,
+        ) + 1
+
+        await db.sets.add({
+          workoutId: workout.id,
+          exerciseId,
+          setNumber: nextSetNumber,
+          weight: load,
+          reps: repCount,
+          rir: rirCount,
+          estimated1RM: estimate1RMOrNull(load, repCount),
+          timestamp: Date.now(),
+        })
       })
 
       await loadExerciseData(exerciseId, exercises)
+    } catch (error) {
+      setStorageError(`Set kaydedilemedi: ${error.message}`)
     } finally {
       setSaving(false)
     }
   }
 
   async function handleDeleteSet(id) {
-    await db.sets.delete(id)
-    if (editingSetId === id) setEditingSetId(null)
-    await loadExerciseData(exerciseId, exercises)
+    try {
+      await db.sets.delete(id)
+      if (editingSetId === id) setEditingSetId(null)
+      await loadExerciseData(exerciseId, exercises)
+    } catch (error) {
+      setStorageError(`Set silinemedi: ${error.message}`)
+    }
   }
 
   function handleEditSet(set) {
@@ -290,20 +309,25 @@ export default function App() {
   }
 
   function bumpWeight(delta) {
-    setWeight((prev) => Math.max(0, Math.round((prev + delta) * 10) / 10))
+    setWeight((prev) => Math.max(0, Math.round(((Number(prev) || 0) + delta) * 10) / 10))
   }
 
   function bumpReps(delta) {
-    setReps((prev) => Math.max(1, prev + delta))
+    setReps((prev) => Math.min(100, Math.max(1, Number(prev || 1) + delta)))
   }
 
   function bumpRir(delta) {
-    setRir((prev) => Math.max(0, Number(prev || 0) + delta))
+    setRir((prev) => Math.min(10, Math.max(0, Number(prev || 0) + delta)))
   }
 
   return (
     <div className="min-h-dvh bg-slate-950 text-slate-100">
       <div className="mx-auto flex min-h-dvh max-w-md flex-col px-4 pb-28 pt-6">
+        {storageError && (
+          <div role="alert" className="mb-4 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+            {storageError}
+          </div>
+        )}
         <header className="mb-6 flex items-center gap-3">
           <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-emerald-500/15 text-emerald-400">
             <Dumbbell className="h-6 w-6" strokeWidth={2.2} />
@@ -443,7 +467,9 @@ export default function App() {
               inputMode="decimal"
               value={weight}
               onFocus={(e) => e.target.select()}
-              onChange={(e) => setWeight(readNumberInput(e, 0))}
+              min={0}
+              step="any"
+              onChange={(e) => setWeight(e.target.value === '' ? '' : Number(e.target.value))}
               className="h-16 w-24 rounded-2xl border border-slate-800 bg-slate-900 text-center text-2xl font-bold text-white outline-none ring-emerald-500 focus:ring-2"
             />
             <button
@@ -471,7 +497,10 @@ export default function App() {
               inputMode="numeric"
               value={reps}
               onFocus={(e) => e.target.select()}
-              onChange={(e) => setReps(readNumberInput(e, 1))}
+              min={1}
+              max={100}
+              step={1}
+              onChange={(e) => setReps(e.target.value === '' ? '' : Number(e.target.value))}
               className="h-16 w-24 rounded-2xl border border-slate-800 bg-slate-900 text-center text-2xl font-bold text-white outline-none ring-emerald-500 focus:ring-2"
             />
             <button
@@ -501,7 +530,8 @@ export default function App() {
               max={10}
               value={rir}
               onFocus={(e) => e.target.select()}
-              onChange={(e) => setRir(readNumberInput(e, 0))}
+              step={1}
+              onChange={(e) => setRir(e.target.value === '' ? '' : Number(e.target.value))}
               className="h-16 w-24 rounded-2xl border border-slate-800 bg-slate-900 text-center text-2xl font-bold text-white outline-none ring-emerald-500 focus:ring-2"
             />
             <button

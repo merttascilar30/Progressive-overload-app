@@ -16,7 +16,11 @@ function dayKey(timestamp) {
 }
 
 function setEstimate(set) {
-  return calculate1RM(set.weight, set.reps)
+  try {
+    return calculate1RM(set.weight, set.reps)
+  } catch {
+    return null
+  }
 }
 
 // Setleri gün -> egzersiz -> setler şeklinde gruplar (en yeni gün önce).
@@ -35,11 +39,13 @@ function groupSets(sets, exerciseInfo, routineNames) {
 
     if (!best1RM.has(set.exerciseId)) best1RM.set(set.exerciseId, new Map())
     const perDay = best1RM.get(set.exerciseId)
-    perDay.set(key, Math.max(perDay.get(key) ?? 0, setEstimate(set)))
+    const estimate = setEstimate(set)
+    if (estimate != null) perDay.set(key, Math.max(perDay.get(key) ?? 0, estimate))
   }
 
   function getDelta(exerciseId, key) {
     const perDay = best1RM.get(exerciseId)
+    if (!perDay?.has(key)) return null
     const previousDays = [...perDay.keys()].filter((k) => k < key)
     if (previousDays.length === 0) return null
     const previousKey = Math.max(...previousDays)
@@ -58,6 +64,13 @@ function groupSets(sets, exerciseInfo, routineNames) {
           exerciseId,
           name: info?.name ?? 'Bilinmeyen hareket',
           delta: getDelta(exerciseId, key),
+          volume: list.reduce((total, set) => {
+            const weight = Number(set.weight)
+            const reps = Number(set.reps)
+            return Number.isFinite(weight) && weight >= 0 && Number.isInteger(reps) && reps > 0
+              ? total + weight * reps
+              : total
+          }, 0),
           sets: list.sort(
             (a, b) => (a.setNumber ?? 0) - (b.setNumber ?? 0) || a.timestamp - b.timestamp,
           ),
@@ -95,12 +108,18 @@ export default function HistoryView({ exercises }) {
   const [editModeDate, setEditModeDate] = useState(null)
   const [editingSetId, setEditingSetId] = useState(null)
   const [draft, setDraft] = useState({ weight: 0, reps: 1, rir: 0 })
+  const [loadError, setLoadError] = useState('')
 
   const load = useCallback(async () => {
-    const [sets, routines] = await Promise.all([db.sets.toArray(), db.routines.toArray()])
-    const exerciseInfo = new Map(exercises.map((ex) => [ex.id, ex]))
-    const routineNames = new Map(routines.map((r) => [r.id, r.name]))
-    setGroups(groupSets(sets, exerciseInfo, routineNames))
+    try {
+      const [sets, routines] = await Promise.all([db.sets.toArray(), db.routines.toArray()])
+      const exerciseInfo = new Map(exercises.map((ex) => [ex.id, ex]))
+      const routineNames = new Map(routines.map((r) => [r.id, r.name]))
+      setGroups(groupSets(sets, exerciseInfo, routineNames))
+      setLoadError('')
+    } catch (error) {
+      setLoadError(`Geçmiş yüklenemedi: ${error.message}`)
+    }
   }, [exercises])
 
   useEffect(() => {
@@ -123,13 +142,13 @@ export default function HistoryView({ exercises }) {
 
   async function confirmEdit() {
     const weight = Math.max(0, Number(draft.weight) || 0)
-    const reps = Math.max(1, Number(draft.reps) || 1)
+    const reps = Math.min(100, Math.max(1, Number(draft.reps) || 1))
     const rir = Math.max(0, Number(draft.rir) || 0)
     await db.sets.update(editingSetId, {
       weight,
       reps,
       rir,
-      estimated1RM: Number(calculate1RM(weight, reps).toFixed(1)),
+      estimated1RM: reps <= 12 ? Number(calculate1RM(weight, reps).toFixed(1)) : null,
     })
     setEditingSetId(null)
     await load()
@@ -142,7 +161,7 @@ export default function HistoryView({ exercises }) {
   }
 
   if (groups === null) {
-    return <p className="text-center text-sm text-slate-500">Yükleniyor…</p>
+    return <p role={loadError ? 'alert' : undefined} className="text-center text-sm text-slate-500">{loadError || 'Yükleniyor…'}</p>
   }
 
   if (groups.length === 0) {
@@ -190,7 +209,7 @@ export default function HistoryView({ exercises }) {
                 <div key={ex.exerciseId}>
                   <div className="mb-2 flex items-center gap-2">
                     <p className="text-xs font-semibold uppercase tracking-wider text-emerald-400">
-                      {ex.name}
+                      {ex.name} · Hacim {ex.volume.toLocaleString('tr-TR')} kg
                     </p>
                     <ProgressBadge delta={ex.delta} />
                   </div>
