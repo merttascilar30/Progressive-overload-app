@@ -1,4 +1,4 @@
-const DEFAULT_REP_RANGE = { min: 8, max: 10 }
+const DEFAULT_REP_RANGE = { min: 6, max: 8 }
 
 function finiteNumber(value, label) {
   const number = Number(value)
@@ -90,13 +90,13 @@ function kg(value) {
 }
 
 /**
- * Önceki seansın tüm çalışma setlerine göre RIR destekli double progression.
+ * Önceki seansın çalışma setlerine göre RIR destekli double progression (varsayılan aralık 6–8).
+ * Çalışma ağırlığı = seanstaki en ağır yük; hafif/back-off setler karara katılmaz.
  *
- * - Tüm setler aralığın tepesinde ve çok rahat (ort. RIR ≥ 4): 2 adım artır.
- * - Tüm setler aralığın tepesinde ve RIR ≥ 1: 1 adım artır.
- * - Tüm setler tepede ama tükenişe gidilmiş (ort. RIR < 1): ağırlığı koru.
- * - Aralığın altında kalınmış ve tükenişe gidilmiş: 1 adım düşür.
- * - Aksi halde aynı ağırlıkla tekrar artır (RIR ≥ 3 ise +2, değilse +1).
+ * - Çalışma ağırlığında en az bir set aralığın tepesine (8) ulaştı: ağırlığı artır
+ *   (ort. RIR ≥ 4 ise 2 adım, değilse 1 adım).
+ * - En iyi set bile aralığın altında (< 6) kaldı: ağırlığı 1 adım düşür.
+ * - Aksi halde aynı ağırlıkla tekrar artır (RIR ≥ 3 ise +2, değilse +1; tavan 8).
  */
 export function getSetRecommendation(previousSets, incrementStep = 2.5, repRange = DEFAULT_REP_RANGE) {
   if (!Array.isArray(previousSets) || previousSets.length === 0) {
@@ -114,30 +114,35 @@ export function getSetRecommendation(previousSets, incrementStep = 2.5, repRange
   if (sets.length === 0) return 'Önceki seansta geçerli set bulunamadı; kontrollü bir ağırlık seç.'
 
   // Çalışma ağırlığı = seanstaki en ağır yük; back-off/ısınma setleri öneriyi bozmasın.
-  const lastWeight = Math.max(...sets.map((set) => Number(set.weight)))
-  const reps = sets.map((set) => Number(set.reps))
-  const rirs = sets.map((set) => {
+  const workingWeight = Math.max(...sets.map((set) => Number(set.weight)))
+  const working = sets.filter((set) => Number(set.weight) === workingWeight)
+  const reps = working.map((set) => Number(set.reps))
+  const bestReps = Math.max(...reps)
+  const rirs = working.map((set) => {
     const value = Number(set.rir)
     return set.rir != null && Number.isFinite(value) ? value : DEFAULT_RIR
   })
   const avgRir = rirs.reduce((sum, value) => sum + value, 0) / rirs.length
   const rirLabel = `ort. RIR ${Number(avgRir.toFixed(1))}`
-  const allAtTop = reps.every((count) => count >= max)
 
-  if (allAtTop && avgRir >= 4) {
-    return `Hedef: ${kg(lastWeight + step * 2)} kg ile ${min}–${max} tekrar. Önceki seans çok rahattı (${rirLabel}).`
+  // Üst sınıra (8) ulaşıldı → ağırlık artar. RIR sadece artış miktarını belirler.
+  if (bestReps >= max) {
+    if (avgRir >= 4) {
+      return `Hedef: ${kg(workingWeight + step * 2)} kg ile ${min}–${max} tekrar. Önceki seans çok rahattı (${rirLabel}).`
+    }
+    return `Hedef: ${kg(workingWeight + step)} kg ile ${min}–${max} tekrar (${rirLabel}).`
   }
-  if (allAtTop && avgRir >= 1) {
-    return `Hedef: ${kg(lastWeight + step)} kg ile ${min}–${max} tekrar (${rirLabel}).`
-  }
-  if (allAtTop) {
-    return `Hedef: ${kg(lastWeight)} kg ile ${max} tekrar, 1–2 tekrar yedekte bırak. Tükenişe gittin (${rirLabel}); artırmadan önce rahatlat.`
-  }
-  if (Math.min(...reps) < min && avgRir < 1) {
-    return `Hedef: ${kg(lastWeight - step)} kg ile ${min}–${max} tekrar. Aralığın altında tükenişe gittin (${rirLabel}).`
+
+  // En iyi set bile alt sınırın (6) altında kaldı → ağırlık düşer (0 kg'ın altına inmez).
+  if (bestReps < min) {
+    const lowered = kg(workingWeight - step)
+    if (lowered < workingWeight) {
+      return `Hedef: ${lowered} kg ile ${min}–${max} tekrar. ${min} tekrarın altında kaldın (en iyi set ${bestReps} tekrar).`
+    }
+    return `Hedef: ${kg(workingWeight)} kg ile ${min} tekrar; ${min} tekrarın altında kaldın, formu koru.`
   }
 
   const repJump = avgRir >= 3 ? 2 : 1
-  const nextReps = Math.min(max, Math.max(min, Math.max(...reps) + repJump))
-  return `Hedef: ${kg(lastWeight)} kg ile ${nextReps} tekrar; setlerde formu koru (${rirLabel}).`
+  const nextReps = Math.min(max, bestReps + repJump)
+  return `Hedef: ${kg(workingWeight)} kg ile ${nextReps} tekrar; setlerde formu koru (${rirLabel}).`
 }

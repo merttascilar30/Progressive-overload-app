@@ -443,7 +443,7 @@ export default function App() {
 
         <Stepper
           id="weight"
-          label="AÄŸÄ±rlÄ±k (kg)"
+          label="Ağırlık (kg)"
           value={weight}
           onChange={setWeight}
           onStep={bumpWeight}
