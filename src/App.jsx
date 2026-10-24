@@ -1,21 +1,23 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Dumbbell, History, Pencil, Settings, Trash2 } from 'lucide-react'
-import { db, seedDatabase } from './db'
+import {
+  db,
+  seedDatabase,
+  isActive,
+  addSet,
+  updateSet,
+  deleteSetAndRenumber,
+  addExercise,
+  archiveExercise,
+  archiveRoutine,
+} from './db'
 import HistoryView from './components/HistoryView'
 import ExercisePoolModal from './components/ExercisePoolModal'
 import ManageModal from './components/ManageModal'
-import {
-  calculate1RM,
-  getSetRecommendation,
-} from './utils/progressionEngine'
+import { LIMITS, getSetRecommendation, parseSetInput } from './utils/progressionEngine'
 
-function todayDateString() {
-  const date = new Date()
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
-}
+const DEFAULT_STEP = 2.5
+const DEFAULT_RIR = 2
 
 function startOfDay(timestamp = Date.now()) {
   const d = new Date(timestamp)
@@ -23,34 +25,52 @@ function startOfDay(timestamp = Date.now()) {
   return d.getTime()
 }
 
-function startOfToday() {
-  return startOfDay()
-}
+const bySetOrder = (a, b) => (a.setNumber ?? 0) - (b.setNumber ?? 0) || a.timestamp - b.timestamp
 
-function estimate1RMOrNull(load, repCount) {
-  return repCount <= 12 ? Number(calculate1RM(load, repCount).toFixed(1)) : null
-}
+// Ondalık artıkları (ör. 21.250000001) temizler; 1.25 kg gibi mikro adımları korur.
+const roundKg = (value) => Math.round(value * 100) / 100
 
-function getPreviousSessionSets(history) {
-  const today = startOfToday()
-  const byDay = new Map()
-
+/** Bugünden önceki en son antrenman gününün setleri (tek geçiş). */
+function getPreviousSessionSets(history, today = startOfDay()) {
+  let lastDay = null
   for (const set of history) {
     const day = startOfDay(set.timestamp)
-    if (day >= today) continue
-    const bucket = byDay.get(day)
-    if (bucket) bucket.push(set)
-    else byDay.set(day, [set])
+    if (day < today && (lastDay == null || day > lastDay)) lastDay = day
   }
-
-  const days = [...byDay.keys()].sort((a, b) => a - b)
-  const lastDay = days[days.length - 1]
   if (lastDay == null) return []
+  return history.filter((set) => startOfDay(set.timestamp) === lastDay).sort(bySetOrder)
+}
 
-  return byDay.get(lastDay).sort((a, b) => {
-    const byNumber = (a.setNumber ?? 0) - (b.setNumber ?? 0)
-    return byNumber !== 0 ? byNumber : a.timestamp - b.timestamp
-  })
+function Stepper({ id, label, value, onChange, onStep, stepLabel, inputMode, min, max, step }) {
+  const btn =
+    'flex h-16 min-w-[5.5rem] flex-1 items-center justify-center rounded-2xl bg-slate-800 text-lg font-bold text-white active:bg-slate-700'
+  return (
+    <div className="mb-5">
+      <label htmlFor={id} className="mb-2 block text-sm font-medium text-slate-400">
+        {label}
+      </label>
+      <div className="flex items-center gap-3">
+        <button type="button" aria-label={`${label} azalt`} onClick={() => onStep(-1)} className={btn}>
+          −{stepLabel}
+        </button>
+        <input
+          id={id}
+          type="number"
+          inputMode={inputMode}
+          value={value}
+          min={min}
+          max={max}
+          step={step}
+          onFocus={(e) => e.target.select()}
+          onChange={(e) => onChange(e.target.value === '' ? '' : Number(e.target.value))}
+          className="h-16 w-24 rounded-2xl border border-slate-800 bg-slate-900 text-center text-2xl font-bold text-white outline-none ring-emerald-500 focus:ring-2"
+        />
+        <button type="button" aria-label={`${label} artır`} onClick={() => onStep(1)} className={btn}>
+          +{stepLabel}
+        </button>
+      </div>
+    </div>
+  )
 }
 
 export default function App() {
@@ -59,23 +79,30 @@ export default function App() {
   const [routineId, setRoutineId] = useState(null)
   const [exercises, setExercises] = useState([])
   const [exerciseId, setExerciseId] = useState(null)
-  const [recommendation, setRecommendation] = useState(() =>
-    getSetRecommendation(null),
-  )
-  const [weight, setWeight] = useState(20)
+  const [recommendation, setRecommendation] = useState(() => getSetRecommendation(null))
+  const [weight, setWeight] = useState('')
   const [reps, setReps] = useState(8)
-  const [rir, setRir] = useState(2)
+  const [rir, setRir] = useState(DEFAULT_RIR)
   const [todaySets, setTodaySets] = useState([])
   const [previousSets, setPreviousSets] = useState([])
   const [saving, setSaving] = useState(false)
   const [storageError, setStorageError] = useState('')
   const [editingSetId, setEditingSetId] = useState(null)
-  const loadRequestId = useRef(0)
   // null | 'routine-add' | 'routine-manage' | 'exercise-add' | 'exercise-manage'
   const [modal, setModal] = useState(null)
+  const loadRequestId = useRef(0)
+  const savingRef = useRef(false) // Aynı frame'deki çift dokunuşa karşı senkron kilit
 
-  const selectedExercise = exercises.find((ex) => ex.id === exerciseId)
-  const visibleExercises = exercises.filter((ex) => ex.routineId === routineId)
+  // Arşivlenmiş gün/hareketler seçicilerde görünmez; geçmiş ekranı hepsini (isim için) alır.
+  const activeRoutines = useMemo(() => routines.filter(isActive), [routines])
+  const visibleExercises = useMemo(
+    () => exercises.filter((ex) => isActive(ex) && ex.routineId === routineId),
+    [exercises, routineId],
+  )
+  const selectedExercise = visibleExercises.find((ex) => ex.id === exerciseId)
+  const selectedRoutine = activeRoutines.find((r) => r.id === routineId)
+  const weightStep = selectedExercise?.incrementStep ?? DEFAULT_STEP
+  const closeModal = useCallback(() => setModal(null), [])
 
   const loadExerciseData = useCallback(async (id, list, { prefill = false } = {}) => {
     const requestId = ++loadRequestId.current
@@ -89,21 +116,27 @@ export default function App() {
     try {
       const history = await db.sets.where('exerciseId').equals(id).sortBy('timestamp')
       if (requestId !== loadRequestId.current) return
-      const from = startOfToday()
-      const today = history.filter((set) => set.timestamp >= from)
-      const previous = getPreviousSessionSets(history)
+      const today = startOfDay()
+      const previous = getPreviousSessionSets(history, today)
 
-      setTodaySets(today)
+      setTodaySets(history.filter((set) => set.timestamp >= today).sort(bySetOrder))
       setPreviousSets(previous)
 
-      const step = list?.find((ex) => ex.id === id)?.incrementStep ?? 2.5
+      const step = list?.find((ex) => ex.id === id)?.incrementStep ?? DEFAULT_STEP
       setRecommendation(getSetRecommendation(previous, step))
 
-      const matchingPrevious = previous[previous.length - 1]
-      if (prefill && matchingPrevious) {
-        setWeight(matchingPrevious.weight)
-        setReps(matchingPrevious.reps)
-        setRir(typeof matchingPrevious.rir === 'number' ? matchingPrevious.rir : 2)
+      if (prefill) {
+        const lastSet = previous[previous.length - 1]
+        if (lastSet) {
+          setWeight(lastSet.weight)
+          setReps(lastSet.reps)
+          setRir(Number.isInteger(lastSet.rir) ? lastSet.rir : DEFAULT_RIR)
+        } else {
+          // İlk kez yapılan harekette önceki egzersizin ağırlığı taşınmasın.
+          setWeight('')
+          setReps(8)
+          setRir(DEFAULT_RIR)
+        }
       }
     } catch (error) {
       if (requestId === loadRequestId.current) {
@@ -112,21 +145,28 @@ export default function App() {
     }
   }, [])
 
+  const refreshCatalog = useCallback(async () => {
+    const [routineList, list] = await Promise.all([db.routines.toArray(), db.exercises.toArray()])
+    setRoutines(routineList)
+    setExercises(list)
+    return { routineList, list }
+  }, [])
+
   useEffect(() => {
     let cancelled = false
 
     async function boot() {
       try {
         await seedDatabase()
-        const routineList = await db.routines.toArray()
-        const list = await db.exercises.toArray()
+        const [routineList, list] = await Promise.all([db.routines.toArray(), db.exercises.toArray()])
         if (cancelled) return
 
         setRoutines(routineList)
         setExercises(list)
-        const firstRoutineId = routineList[0]?.id ?? null
+        const firstRoutineId = routineList.find(isActive)?.id ?? null
         setRoutineId(firstRoutineId)
-        const firstId = list.find((ex) => ex.routineId === firstRoutineId)?.id ?? null
+        const firstId =
+          list.find((ex) => isActive(ex) && ex.routineId === firstRoutineId)?.id ?? null
         setExerciseId(firstId)
         await loadExerciseData(firstId, list, { prefill: true })
       } catch (error) {
@@ -143,16 +183,22 @@ export default function App() {
   async function handleExerciseChange(nextId, list = exercises) {
     setExerciseId(nextId)
     setEditingSetId(null)
-    setTodaySets([])
-    setPreviousSets([])
-    setRecommendation(getSetRecommendation(null))
+    setStorageError('')
     await loadExerciseData(nextId, list, { prefill: true })
   }
 
-  async function handleRoutineChange(nextRoutineId) {
+  async function selectRoutine(nextRoutineId, list = exercises) {
     setRoutineId(nextRoutineId)
-    const firstId = exercises.find((ex) => ex.routineId === nextRoutineId)?.id ?? null
-    await handleExerciseChange(firstId)
+    const firstId =
+      list.find((ex) => isActive(ex) && ex.routineId === nextRoutineId)?.id ?? null
+    await handleExerciseChange(firstId, list)
+  }
+
+  function handleTabChange(key) {
+    setActiveTab(key)
+    setEditingSetId(null)
+    // Geçmiş ekranındaki düzenleme/silmeler burada bayat kalmasın.
+    if (key === 'workout') loadExerciseData(exerciseId, exercises)
   }
 
   function handleAddRoutine() {
@@ -171,129 +217,75 @@ export default function App() {
     if (selectedExercise) setModal('exercise-manage')
   }
 
+  // CRUD: hatalar fırlatılır; modal yakalayıp gösterir ve açık kalır.
   async function submitAddRoutine(name) {
     const id = await db.routines.add({ name })
-    setRoutines(await db.routines.toArray())
-    await handleRoutineChange(id)
+    const { list } = await refreshCatalog()
+    await selectRoutine(id, list)
   }
 
-  async function submitAddExercise(name, targetMuscle = 'Genel') {
-    const id = await db.exercises.add({
-      name,
-      targetMuscle,
-      equipmentType: 'other',
-      incrementStep: 2.5,
-      routineId,
-    })
-    const list = await db.exercises.toArray()
-    setExercises(list)
+  // ExercisePoolModal { name, targetMuscle, equipmentType, incrementStep } nesnesi gönderir.
+  async function submitAddExercise(exercise) {
+    const id = await addExercise({ ...exercise, routineId })
+    const { list } = await refreshCatalog()
     await handleExerciseChange(id, list)
   }
 
   async function submitRenameRoutine(name) {
     await db.routines.update(routineId, { name })
-    setRoutines(await db.routines.toArray())
+    await refreshCatalog()
   }
 
   async function submitRenameExercise(name) {
     await db.exercises.update(exerciseId, { name })
-    setExercises(await db.exercises.toArray())
+    await refreshCatalog()
   }
 
   async function deleteRoutine() {
-    // Güne bağlı hareketler de silinir (set kayıtları geçmişte korunur)
-    await db.exercises.where('routineId').equals(routineId).delete()
-    await db.routines.delete(routineId)
-    const routineList = await db.routines.toArray()
-    const list = await db.exercises.toArray()
-    setRoutines(routineList)
-    setExercises(list)
-    const nextRoutineId = routineList[0]?.id ?? null
-    setRoutineId(nextRoutineId)
-    const nextExerciseId = list.find((ex) => ex.routineId === nextRoutineId)?.id ?? null
-    await handleExerciseChange(nextExerciseId, list)
+    // Gün ve hareketleri arşivlenir (set kayıtları geçmişte isimleriyle korunur)
+    await archiveRoutine(routineId)
+    const { routineList, list } = await refreshCatalog()
+    await selectRoutine(routineList.find(isActive)?.id ?? null, list)
   }
 
   async function deleteExercise() {
-    await db.exercises.delete(exerciseId)
-    const list = await db.exercises.toArray()
-    setExercises(list)
-    const nextId = list.find((ex) => ex.routineId === routineId)?.id ?? null
+    await archiveExercise(exerciseId)
+    const { list } = await refreshCatalog()
+    const nextId = list.find((ex) => isActive(ex) && ex.routineId === routineId)?.id ?? null
     await handleExerciseChange(nextId, list)
   }
 
-
   async function handleSaveSet() {
-    if (!exerciseId || saving) return
+    if (!exerciseId || savingRef.current) return
 
-    const load = Number(weight)
-    const repCount = Number(reps)
-    const rirCount = Number(rir)
-    if (!Number.isFinite(load) || load < 0) {
-      setStorageError('Ağırlık sıfır veya daha büyük bir sayı olmalıdır.')
-      return
-    }
-    if (!Number.isInteger(repCount) || repCount < 1 || repCount > 100) {
-      setStorageError('Tekrar 1–100 arasında tam sayı olmalıdır.')
-      return
-    }
-    if (!Number.isInteger(rirCount) || rirCount < 0 || rirCount > 10) {
-      setStorageError('RIR 0–10 arasında tam sayı olmalıdır.')
+    const { value, error } = parseSetInput({ weight, reps, rir })
+    if (error) {
+      setStorageError(error)
       return
     }
 
+    savingRef.current = true
     setSaving(true)
     setStorageError('')
     try {
       if (editingSetId != null) {
-        await db.sets.update(editingSetId, {
-          weight: load,
-          reps: repCount,
-          rir: rirCount,
-          estimated1RM: estimate1RMOrNull(load, repCount),
-        })
+        await updateSet(editingSetId, value)
         setEditingSetId(null)
-        await loadExerciseData(exerciseId, exercises)
-        return
+      } else {
+        await addSet(exerciseId, value)
       }
-
-      const date = todayDateString()
-      await db.transaction('rw', db.workouts, db.sets, async () => {
-        let workout = await db.workouts.where('date').equals(date).first()
-        if (!workout) {
-          const id = await db.workouts.add({ date, name: 'Antrenman', isCompleted: false })
-          workout = { id }
-        }
-
-        const existing = await db.sets.where('exerciseId').equals(exerciseId)
-          .and((set) => set.workoutId === workout.id).toArray()
-        const nextSetNumber = existing.reduce(
-          (max, set) => Math.max(max, set.setNumber ?? 0), 0,
-        ) + 1
-
-        await db.sets.add({
-          workoutId: workout.id,
-          exerciseId,
-          setNumber: nextSetNumber,
-          weight: load,
-          reps: repCount,
-          rir: rirCount,
-          estimated1RM: estimate1RMOrNull(load, repCount),
-          timestamp: Date.now(),
-        })
-      })
-
       await loadExerciseData(exerciseId, exercises)
     } catch (error) {
       setStorageError(`Set kaydedilemedi: ${error.message}`)
     } finally {
+      savingRef.current = false
       setSaving(false)
     }
   }
 
   async function handleDeleteSet(id) {
     try {
-      await db.sets.delete(id)
+      await deleteSetAndRenumber(id)
       if (editingSetId === id) setEditingSetId(null)
       await loadExerciseData(exerciseId, exercises)
     } catch (error) {
@@ -305,20 +297,17 @@ export default function App() {
     setEditingSetId(set.id)
     setWeight(set.weight)
     setReps(set.reps)
-    setRir(typeof set.rir === 'number' ? set.rir : 2)
+    setRir(Number.isInteger(set.rir) ? set.rir : DEFAULT_RIR)
   }
 
-  function bumpWeight(delta) {
-    setWeight((prev) => Math.max(0, Math.round(((Number(prev) || 0) + delta) * 10) / 10))
+  // Ağırlık butonu egzersizin kendi artış adımını kullanır (dumbbell 2, lateral raise 1 ...).
+  function bumpWeight(direction) {
+    setWeight((prev) => Math.max(0, roundKg((Number(prev) || 0) + direction * weightStep)))
   }
 
-  function bumpReps(delta) {
-    setReps((prev) => Math.min(100, Math.max(1, Number(prev || 1) + delta)))
-  }
+  const bumpInt = (setter, min, max) => (direction) =>
+    setter((prev) => Math.min(max, Math.max(min, Math.round(Number(prev) || 0) + direction)))
 
-  function bumpRir(delta) {
-    setRir((prev) => Math.min(10, Math.max(0, Number(prev || 0) + delta)))
-  }
 
   return (
     <div className="min-h-dvh bg-slate-950 text-slate-100">
@@ -354,10 +343,10 @@ export default function App() {
           <select
             id="routine"
             value={routineId ?? ''}
-            onChange={(e) => handleRoutineChange(Number(e.target.value))}
+            onChange={(e) => selectRoutine(Number(e.target.value))}
             className="h-14 min-w-0 flex-1 appearance-none rounded-2xl border border-slate-800 bg-slate-900 px-4 text-base font-semibold text-white outline-none ring-emerald-500 focus:ring-2"
           >
-            {routines.map((r) => (
+            {activeRoutines.map((r) => (
               <option key={r.id} value={r.id}>
                 {r.name}
               </option>
@@ -452,97 +441,42 @@ export default function App() {
           </p>
         </section>
 
-        <div className="mb-5">
-          <p className="mb-2 text-sm font-medium text-slate-400">Ağırlık (kg)</p>
-          <div className="flex items-center gap-3">
-            <button
-              type="button"
-              onClick={() => bumpWeight(-2.5)}
-              className="flex h-16 min-w-[5.5rem] flex-1 items-center justify-center rounded-2xl bg-slate-800 text-lg font-bold text-white active:bg-slate-700"
-            >
-              −2.5
-            </button>
-            <input
-              type="number"
-              inputMode="decimal"
-              value={weight}
-              onFocus={(e) => e.target.select()}
-              min={0}
-              step="any"
-              onChange={(e) => setWeight(e.target.value === '' ? '' : Number(e.target.value))}
-              className="h-16 w-24 rounded-2xl border border-slate-800 bg-slate-900 text-center text-2xl font-bold text-white outline-none ring-emerald-500 focus:ring-2"
-            />
-            <button
-              type="button"
-              onClick={() => bumpWeight(2.5)}
-              className="flex h-16 min-w-[5.5rem] flex-1 items-center justify-center rounded-2xl bg-slate-800 text-lg font-bold text-white active:bg-slate-700"
-            >
-              +2.5
-            </button>
-          </div>
-        </div>
-
-        <div className="mb-5">
-          <p className="mb-2 text-sm font-medium text-slate-400">Tekrar</p>
-          <div className="flex items-center gap-3">
-            <button
-              type="button"
-              onClick={() => bumpReps(-1)}
-              className="flex h-16 min-w-[5.5rem] flex-1 items-center justify-center rounded-2xl bg-slate-800 text-lg font-bold text-white active:bg-slate-700"
-            >
-              −1
-            </button>
-            <input
-              type="number"
-              inputMode="numeric"
-              value={reps}
-              onFocus={(e) => e.target.select()}
-              min={1}
-              max={100}
-              step={1}
-              onChange={(e) => setReps(e.target.value === '' ? '' : Number(e.target.value))}
-              className="h-16 w-24 rounded-2xl border border-slate-800 bg-slate-900 text-center text-2xl font-bold text-white outline-none ring-emerald-500 focus:ring-2"
-            />
-            <button
-              type="button"
-              onClick={() => bumpReps(1)}
-              className="flex h-16 min-w-[5.5rem] flex-1 items-center justify-center rounded-2xl bg-slate-800 text-lg font-bold text-white active:bg-slate-700"
-            >
-              +1
-            </button>
-          </div>
-        </div>
-
-        <div className="mb-6">
-          <p className="mb-2 text-sm font-medium text-slate-400">RIR (yedekte kalan tekrar)</p>
-          <div className="flex items-center gap-3">
-            <button
-              type="button"
-              onClick={() => bumpRir(-1)}
-              className="flex h-16 min-w-[5.5rem] flex-1 items-center justify-center rounded-2xl bg-slate-800 text-lg font-bold text-white active:bg-slate-700"
-            >
-              −1
-            </button>
-            <input
-              type="number"
-              inputMode="numeric"
-              min={0}
-              max={10}
-              value={rir}
-              onFocus={(e) => e.target.select()}
-              step={1}
-              onChange={(e) => setRir(e.target.value === '' ? '' : Number(e.target.value))}
-              className="h-16 w-24 rounded-2xl border border-slate-800 bg-slate-900 text-center text-2xl font-bold text-white outline-none ring-emerald-500 focus:ring-2"
-            />
-            <button
-              type="button"
-              onClick={() => bumpRir(1)}
-              className="flex h-16 min-w-[5.5rem] flex-1 items-center justify-center rounded-2xl bg-slate-800 text-lg font-bold text-white active:bg-slate-700"
-            >
-              +1
-            </button>
-          </div>
-        </div>
+        <Stepper
+          id="weight"
+          label="AÄŸÄ±rlÄ±k (kg)"
+          value={weight}
+          onChange={setWeight}
+          onStep={bumpWeight}
+          stepLabel={weightStep}
+          inputMode="decimal"
+          min={0}
+          max={LIMITS.maxWeight}
+          step="any"
+        />
+        <Stepper
+          id="reps"
+          label="Tekrar"
+          value={reps}
+          onChange={setReps}
+          onStep={bumpInt(setReps, 1, LIMITS.maxReps)}
+          stepLabel={1}
+          inputMode="numeric"
+          min={1}
+          max={LIMITS.maxReps}
+          step={1}
+        />
+        <Stepper
+          id="rir"
+          label="RIR (yedekte kalan tekrar)"
+          value={rir}
+          onChange={setRir}
+          onStep={bumpInt(setRir, 0, LIMITS.maxRir)}
+          stepLabel={1}
+          inputMode="numeric"
+          min={0}
+          max={LIMITS.maxRir}
+          step={1}
+        />
 
         <button
           type="button"
@@ -592,7 +526,7 @@ export default function App() {
                   <span className="font-bold text-white">
                     {set.weight} kg × {set.reps}
                   </span>
-                  <span className="text-sm text-emerald-400">RIR {set.rir}</span>
+                  {Number.isInteger(set.rir) && (<span className="text-sm text-emerald-400">RIR {set.rir}</span>)}
                   <span className="flex gap-1">
                     <button
                       type="button"
@@ -629,7 +563,7 @@ export default function App() {
             <button
               key={key}
               type="button"
-              onClick={() => setActiveTab(key)}
+              onClick={() => handleTabChange(key)}
               aria-current={activeTab === key ? 'page' : undefined}
               className={`flex h-14 flex-1 flex-col items-center justify-center gap-1 rounded-2xl text-xs font-semibold transition-colors ${
                 activeTab === key
@@ -651,28 +585,28 @@ export default function App() {
           startMode="input"
           submitLabel="Ekle"
           onSubmit={submitAddRoutine}
-          onClose={() => setModal(null)}
+          onClose={closeModal}
         />
       )}
       {modal === 'exercise-add' && (
         <ExercisePoolModal
-          routineName={routines.find((r) => r.id === routineId)?.name}
+          routineName={selectedRoutine?.name}
           existingNames={visibleExercises.map((ex) => ex.name)}
           onAdd={submitAddExercise}
-          onClose={() => setModal(null)}
+          onClose={closeModal}
         />
       )}
       {modal === 'routine-manage' && (
         <ManageModal
           title="Antrenman Gününü Yönet"
-          subtitle={routines.find((r) => r.id === routineId)?.name}
+          subtitle={selectedRoutine?.name}
           inputLabel="Gün adı"
-          initialValue={routines.find((r) => r.id === routineId)?.name ?? ''}
+          initialValue={selectedRoutine?.name ?? ''}
           canDelete
           deleteWarning="Bu gün ve güne bağlı tüm hareketler silinecek. Geçmiş set kayıtları korunur."
           onSubmit={submitRenameRoutine}
           onDelete={deleteRoutine}
-          onClose={() => setModal(null)}
+          onClose={closeModal}
         />
       )}
       {modal === 'exercise-manage' && selectedExercise && (
@@ -685,7 +619,7 @@ export default function App() {
           deleteWarning="Bu hareket silinecek. Geçmiş set kayıtları korunur."
           onSubmit={submitRenameExercise}
           onDelete={deleteExercise}
-          onClose={() => setModal(null)}
+          onClose={closeModal}
         />
       )}
     </div>

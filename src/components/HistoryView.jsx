@@ -1,7 +1,7 @@
-﻿import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Check, Pencil, Trash2, X } from 'lucide-react'
-import { db } from '../db'
-import { calculate1RM } from '../utils/progressionEngine'
+import { db, deleteSetAndRenumber, updateSet } from '../db'
+import { calculateVolumeLoad, estimate1RM, parseSetInput } from '../utils/progressionEngine'
 
 const dateFormatter = new Intl.DateTimeFormat('tr-TR', {
   day: 'numeric',
@@ -13,14 +13,6 @@ function dayKey(timestamp) {
   const d = new Date(timestamp)
   d.setHours(0, 0, 0, 0)
   return d.getTime()
-}
-
-function setEstimate(set) {
-  try {
-    return calculate1RM(set.weight, set.reps)
-  } catch {
-    return null
-  }
 }
 
 // Setleri gün -> egzersiz -> setler şeklinde gruplar (en yeni gün önce).
@@ -37,19 +29,22 @@ function groupSets(sets, exerciseInfo, routineNames) {
     if (!exMap.has(set.exerciseId)) exMap.set(set.exerciseId, [])
     exMap.get(set.exerciseId).push(set)
 
-    if (!best1RM.has(set.exerciseId)) best1RM.set(set.exerciseId, new Map())
-    const perDay = best1RM.get(set.exerciseId)
-    const estimate = setEstimate(set)
-    if (estimate != null) perDay.set(key, Math.max(perDay.get(key) ?? 0, estimate))
+    // 0 kg (vücut ağırlığı) ve >12 tekrar için estimate1RM null döner; rozet hesabına katılmaz.
+    const estimate = estimate1RM(set.weight, set.reps)
+    if (estimate != null) {
+      if (!best1RM.has(set.exerciseId)) best1RM.set(set.exerciseId, new Map())
+      const perDay = best1RM.get(set.exerciseId)
+      perDay.set(key, Math.max(perDay.get(key) ?? 0, estimate))
+    }
   }
 
-  function getDelta(exerciseId, key) {
-    const perDay = best1RM.get(exerciseId)
-    if (!perDay?.has(key)) return null
-    const previousDays = [...perDay.keys()].filter((k) => k < key)
-    if (previousDays.length === 0) return null
-    const previousKey = Math.max(...previousDays)
-    return perDay.get(key) - perDay.get(previousKey)
+  // Farkları tek seferde hesapla: gün sırasına göre bir önceki günle kıyasla.
+  const deltas = new Map()
+  for (const [exerciseId, perDay] of best1RM) {
+    const keys = [...perDay.keys()].sort((a, b) => a - b)
+    for (let i = 1; i < keys.length; i++) {
+      deltas.set(`${exerciseId}|${keys[i]}`, perDay.get(keys[i]) - perDay.get(keys[i - 1]))
+    }
   }
 
   return [...days.entries()]
@@ -63,14 +58,8 @@ function groupSets(sets, exerciseInfo, routineNames) {
         return {
           exerciseId,
           name: info?.name ?? 'Bilinmeyen hareket',
-          delta: getDelta(exerciseId, key),
-          volume: list.reduce((total, set) => {
-            const weight = Number(set.weight)
-            const reps = Number(set.reps)
-            return Number.isFinite(weight) && weight >= 0 && Number.isInteger(reps) && reps > 0
-              ? total + weight * reps
-              : total
-          }, 0),
+          delta: deltas.get(`${exerciseId}|${key}`) ?? null,
+          volume: calculateVolumeLoad(list),
           sets: list.sort(
             (a, b) => (a.setNumber ?? 0) - (b.setNumber ?? 0) || a.timestamp - b.timestamp,
           ),
@@ -109,30 +98,40 @@ export default function HistoryView({ exercises }) {
   const [editingSetId, setEditingSetId] = useState(null)
   const [draft, setDraft] = useState({ weight: 0, reps: 1, rir: 0 })
   const [loadError, setLoadError] = useState('')
+  const [editError, setEditError] = useState('')
+
+  const requestRef = useRef(0)
 
   const load = useCallback(async () => {
+    const requestId = ++requestRef.current
     try {
       const [sets, routines] = await Promise.all([db.sets.toArray(), db.routines.toArray()])
+      if (requestId !== requestRef.current) return // Eski yanıt yenisinin üstüne yazmasın
       const exerciseInfo = new Map(exercises.map((ex) => [ex.id, ex]))
       const routineNames = new Map(routines.map((r) => [r.id, r.name]))
       setGroups(groupSets(sets, exerciseInfo, routineNames))
       setLoadError('')
     } catch (error) {
-      setLoadError(`Geçmiş yüklenemedi: ${error.message}`)
+      if (requestId === requestRef.current) setLoadError(`Geçmiş yüklenemedi: ${error.message}`)
     }
   }, [exercises])
 
   useEffect(() => {
     load()
+    return () => {
+      requestRef.current++ // Unmount sonrası state yazımını iptal et
+    }
   }, [load])
 
   function toggleEditMode(key) {
     setEditingSetId(null)
+    setEditError('')
     setEditModeDate((prev) => (prev === key ? null : key))
   }
 
   function startEdit(set) {
     setEditingSetId(set.id)
+    setEditError('')
     setDraft({
       weight: set.weight,
       reps: set.reps,
@@ -141,23 +140,31 @@ export default function HistoryView({ exercises }) {
   }
 
   async function confirmEdit() {
-    const weight = Math.max(0, Number(draft.weight) || 0)
-    const reps = Math.min(100, Math.max(1, Number(draft.reps) || 1))
-    const rir = Math.max(0, Number(draft.rir) || 0)
-    await db.sets.update(editingSetId, {
-      weight,
-      reps,
-      rir,
-      estimated1RM: reps <= 12 ? Number(calculate1RM(weight, reps).toFixed(1)) : null,
-    })
-    setEditingSetId(null)
-    await load()
+    const { value, error } = parseSetInput(draft)
+    if (error) {
+      setEditError(error)
+      return
+    }
+
+    try {
+      await updateSet(editingSetId, value)
+      setEditingSetId(null)
+      setEditError('')
+      await load()
+    } catch (err) {
+      setEditError(`Set güncellenemedi: ${err.message}`)
+    }
   }
 
   async function deleteSet(id) {
-    await db.sets.delete(id)
-    if (editingSetId === id) setEditingSetId(null)
-    await load()
+    try {
+      await deleteSetAndRenumber(id)
+      if (editingSetId === id) setEditingSetId(null)
+      setEditError('')
+      await load()
+    } catch (err) {
+      setEditError(`Set silinemedi: ${err.message}`)
+    }
   }
 
   if (groups === null) {
@@ -179,6 +186,11 @@ export default function HistoryView({ exercises }) {
 
   return (
     <div className="space-y-4">
+      {editError && (
+        <div role="alert" className="rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+          {editError}
+        </div>
+      )}
       {groups.map((day) => {
         const isEditMode = editModeDate === day.key
         return (
@@ -256,7 +268,10 @@ export default function HistoryView({ exercises }) {
                                 <button
                                   type="button"
                                   aria-label="İptal"
-                                  onClick={() => setEditingSetId(null)}
+                                  onClick={() => {
+                                    setEditingSetId(null)
+                                    setEditError('')
+                                  }}
                                   className={`${iconButtonClass} text-slate-300`}
                                 >
                                   <X className="h-4 w-4" />

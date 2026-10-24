@@ -22,6 +22,7 @@ export default function ManageModal({
   const [mode, setMode] = useState(startMode)
   const [value, setValue] = useState(initialValue)
   const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
   const inputRef = useRef(null)
 
   useEffect(() => {
@@ -39,9 +40,12 @@ export default function ManageModal({
   async function run(action) {
     if (busy) return
     setBusy(true)
+    setError('')
     try {
       await action()
       onClose()
+    } catch (err) {
+      setError(err?.message ?? 'İşlem başarısız oldu.')
     } finally {
       setBusy(false)
     }
@@ -84,6 +88,12 @@ export default function ManageModal({
             <X className="h-5 w-5" />
           </button>
         </div>
+
+        {error && (
+          <p role="alert" className="mb-3 rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-300">
+            {error}
+          </p>
+        )}
 
         {mode === 'menu' && (
           <div className="space-y-3">

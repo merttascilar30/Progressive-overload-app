@@ -1,55 +1,69 @@
 import { useEffect, useState } from 'react'
 import { Check, Plus, X } from 'lucide-react'
 
+// Ekipman tipine göre varsayılan ağırlık artış adımı (kg). Manuel eklemede kullanılır.
+export const EQUIPMENT_TYPES = [
+  { value: 'barbell', label: 'Barbell', step: 2.5 },
+  { value: 'dumbbell', label: 'Dumbbell', step: 2 },
+  { value: 'machine', label: 'Makine', step: 5 },
+  { value: 'plate_loaded', label: 'Plaka yüklemeli makine', step: 5 },
+  { value: 'cable', label: 'Kablo', step: 2.5 },
+  { value: 'bodyweight', label: 'Vücut ağırlığı', step: 2.5 },
+  { value: 'other', label: 'Diğer', step: 2.5 },
+]
+
+function item(name, muscle, equipmentType, incrementStep) {
+  return { name, muscle, equipmentType, incrementStep }
+}
+
 export const EXERCISE_POOL = [
   {
     category: 'Göğüs & Triceps',
-    muscle: 'Chest',
     items: [
-      'Plate Loaded Incline Chest Press',
-      'Plate Loaded Chest Press',
-      'Chest Fly Machine',
-      'Triceps Pushdown',
-      'Triceps Lying Cable Extension',
-      'Tek Kol Triceps Pushdown',
+      item('Plate Loaded Incline Chest Press', 'Chest', 'plate_loaded', 5),
+      item('Plate Loaded Chest Press', 'Chest', 'plate_loaded', 5),
+      item('Chest Fly Machine', 'Chest', 'machine', 5),
+      item('Triceps Pushdown', 'Triceps', 'cable', 2.5),
+      item('Triceps Lying Cable Extension', 'Triceps', 'cable', 2.5),
+      item('Tek Kol Triceps Pushdown', 'Triceps', 'cable', 1.25),
     ],
   },
   {
     category: 'Sırt & Biceps',
-    muscle: 'Back',
     items: [
-      'Lat Pulldown',
-      'Cable Row',
-      'Plate Loaded Wide Grip Row',
-      'T-Bar Row',
-      'Barbell Curl',
-      'Dumbbell Curl',
-      'Hammer Curl',
+      item('Lat Pulldown', 'Back', 'cable', 2.5),
+      item('Cable Row', 'Back', 'cable', 2.5),
+      item('Plate Loaded Wide Grip Row', 'Back', 'plate_loaded', 5),
+      item('T-Bar Row', 'Back', 'plate_loaded', 5),
+      item('Barbell Curl', 'Biceps', 'barbell', 2.5),
+      item('Dumbbell Curl', 'Biceps', 'dumbbell', 1),
+      item('Hammer Curl', 'Biceps', 'dumbbell', 1),
     ],
   },
   {
     category: 'Omuz & Bacak',
-    muscle: 'Shoulders & Legs',
     items: [
-      'Shoulder Press Machine',
-      'Lateral Raise',
-      'Cable Rear Delt Fly',
-      'Hack Squat',
-      'Leg Extension',
-      'Seated Leg Curl',
-      'Calf Raises Machine',
+      item('Shoulder Press Machine', 'Shoulders', 'machine', 5),
+      item('Lateral Raise', 'Shoulders', 'dumbbell', 1),
+      item('Cable Rear Delt Fly', 'Rear Delts', 'cable', 1.25),
+      item('Hack Squat', 'Quads', 'plate_loaded', 5),
+      item('Leg Extension', 'Quads', 'machine', 5),
+      item('Seated Leg Curl', 'Hamstrings', 'machine', 5),
+      item('Calf Raises Machine', 'Calves', 'machine', 5),
     ],
   },
 ]
 
 /**
  * 'Hareket Ekle' modalı: havuzdan seçim veya manuel isim girişi.
- * onAdd(name, targetMuscle) çağrılır, ardından modal kapanır.
+ * onAdd({ name, targetMuscle, equipmentType, incrementStep }) çağrılır, ardından modal kapanır.
  */
 export default function ExercisePoolModal({ routineName, existingNames, onAdd, onClose }) {
   const [manual, setManual] = useState(false)
   const [name, setName] = useState('')
+  const [equipmentType, setEquipmentType] = useState('machine')
   const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
 
   useEffect(() => {
     function onKey(e) {
@@ -59,12 +73,15 @@ export default function ExercisePoolModal({ routineName, existingNames, onAdd, o
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
 
-  async function add(exerciseName, muscle) {
+  async function add(exercise) {
     if (busy) return
     setBusy(true)
+    setError('')
     try {
-      await onAdd(exerciseName, muscle)
+      await onAdd(exercise)
       onClose()
+    } catch (err) {
+      setError(err?.message ?? 'Hareket eklenemedi.')
     } finally {
       setBusy(false)
     }
@@ -73,7 +90,14 @@ export default function ExercisePoolModal({ routineName, existingNames, onAdd, o
   function handleManualSubmit(e) {
     e.preventDefault()
     const trimmed = name.trim()
-    if (trimmed) add(trimmed, 'Genel')
+    if (!trimmed) return
+    const equipment = EQUIPMENT_TYPES.find((type) => type.value === equipmentType) ?? EQUIPMENT_TYPES.at(-1)
+    add({
+      name: trimmed,
+      targetMuscle: 'Genel',
+      equipmentType: equipment.value,
+      incrementStep: equipment.step,
+    })
   }
 
   const existing = new Set(existingNames.map((n) => n.toLowerCase()))
@@ -106,6 +130,12 @@ export default function ExercisePoolModal({ routineName, existingNames, onAdd, o
           </button>
         </div>
 
+        {error && (
+          <p role="alert" className="mb-3 rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-300">
+            {error}
+          </p>
+        )}
+
         {manual ? (
           <form onSubmit={handleManualSubmit} className="space-y-3">
             <label className="block text-sm font-medium text-slate-400" htmlFor="manual-name">
@@ -119,6 +149,21 @@ export default function ExercisePoolModal({ routineName, existingNames, onAdd, o
               onChange={(e) => setName(e.target.value)}
               className="h-14 w-full rounded-2xl border border-slate-800 bg-slate-950 px-4 text-base font-semibold text-white outline-none ring-emerald-500 focus:ring-2"
             />
+            <label className="block text-sm font-medium text-slate-400" htmlFor="manual-equipment">
+              Ekipman
+            </label>
+            <select
+              id="manual-equipment"
+              value={equipmentType}
+              onChange={(e) => setEquipmentType(e.target.value)}
+              className="h-14 w-full appearance-none rounded-2xl border border-slate-800 bg-slate-950 px-4 text-base font-semibold text-white outline-none ring-emerald-500 focus:ring-2"
+            >
+              {EQUIPMENT_TYPES.map((type) => (
+                <option key={type.value} value={type.value}>
+                  {type.label} · +{type.step} kg
+                </option>
+              ))}
+            </select>
             <button
               type="submit"
               disabled={!name.trim() || busy}
@@ -145,17 +190,24 @@ export default function ExercisePoolModal({ routineName, existingNames, onAdd, o
                 <div key={group.category}>
                   <p className="mb-2 text-sm font-semibold text-slate-400">{group.category}</p>
                   <ul className="space-y-2">
-                    {group.items.map((item) => {
-                      const added = existing.has(item.toLowerCase())
+                    {group.items.map((poolItem) => {
+                      const added = existing.has(poolItem.name.toLowerCase())
                       return (
-                        <li key={item}>
+                        <li key={poolItem.name}>
                           <button
                             type="button"
                             disabled={added || busy}
-                            onClick={() => add(item, group.muscle)}
+                            onClick={() =>
+                              add({
+                                name: poolItem.name,
+                                targetMuscle: poolItem.muscle,
+                                equipmentType: poolItem.equipmentType,
+                                incrementStep: poolItem.incrementStep,
+                              })
+                            }
                             className="flex min-h-12 w-full items-center justify-between gap-2 rounded-2xl border border-slate-800 bg-slate-950 px-4 py-2 text-left text-sm font-semibold text-white active:bg-slate-800 disabled:opacity-40"
                           >
-                            <span>{item}</span>
+                            <span>{poolItem.name}</span>
                             {added ? (
                               <span className="text-xs font-medium text-slate-400">Ekli</span>
                             ) : (
