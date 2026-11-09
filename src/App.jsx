@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ArrowUpDown, Dumbbell, History } from 'lucide-react'
-import { db, seedDatabase, isActive, addExercise, archiveExercise, archiveRoutine, renameRoutine, reorderExercises, restoreSet, updateExercise } from './db'
+import { db, seedDatabase, isActive, addExercise, addRoutine, archiveExercise, archiveRoutine, renameRoutine, reorderExercises, restoreSet, updateExercise } from './db'
 import { beep, vibrate } from './utils/notify'
 import { getLastBackupAt, getRestAuto, getRestSeconds, needsBackupReminder } from './utils/settings'
 import useRestTimer from './hooks/useRestTimer'
@@ -38,6 +38,8 @@ export default function App() {
   const dismissToast = useCallback(() => setToast(null), [])
   // Geri alma sonrası görünür listelerin yeniden okunması için artar.
   const [refreshToken, setRefreshToken] = useState(0)
+  // Yedekten dönünce artar; WorkoutView/HistoryView yeniden kurulur (eski id'lere bağlı açık düzenlemeler düşer).
+  const [restoreGeneration, setRestoreGeneration] = useState(0)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [backupReminder, setBackupReminder] = useState(false)
 
@@ -79,6 +81,7 @@ export default function App() {
     setRoutineId(firstRoutineId)
     setExerciseId(firstExerciseId(list, firstRoutineId))
     setRefreshToken((token) => token + 1)
+    setRestoreGeneration((generation) => generation + 1)
     await refreshBackupReminder()
   }
 
@@ -127,7 +130,9 @@ export default function App() {
       rest.start(selectedExercise.restSeconds ?? getRestSeconds(), selectedExercise.name)
     }
     if (!isPR) return
-    showToast({ message: `🏆 Yeni rekor! Tahmini 1RM ${estimated1RM} kg` })
+    // Bekleyen "Geri al" toast'ı varsa ezilmez (silinen seti geri alma fırsatı kaybolmasın);
+    // o durumda yalnızca ses/titreşim ile rekor bildirilir.
+    if (!toast?.onAction) showToast({ message: `🏆 Yeni rekor! Tahmini 1RM ${estimated1RM} kg` })
     vibrate([100, 50, 100])
     beep([0, 0.15], 1320)
   }
@@ -148,7 +153,7 @@ export default function App() {
 
   // CRUD: hatalar fırlatılır; modal yakalayıp gösterir ve açık kalır.
   async function submitAddRoutine(name) {
-    const id = await db.routines.add({ name })
+    const id = await addRoutine(name)
     const { list } = await refreshCatalog()
     selectRoutine(id, list)
   }
@@ -202,11 +207,12 @@ export default function App() {
         />
 
         {activeTab === 'history' && (
-          <HistoryView exercises={exercises} refreshToken={refreshToken} onSetDeleted={handleSetDeleted} />
+          <HistoryView key={restoreGeneration} exercises={exercises} refreshToken={refreshToken} onSetDeleted={handleSetDeleted} />
         )}
         {/* Gizlenir ama bağlı kalır: sekme dönüşünde yazılan form değerleri korunur. */}
         <div hidden={activeTab !== 'workout'}>
           <WorkoutView
+            key={restoreGeneration}
             active={activeTab === 'workout'}
             routines={routines}
             exercises={exercises}
