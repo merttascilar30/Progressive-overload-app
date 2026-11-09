@@ -6,6 +6,9 @@ import { DEFAULT_RIR, LIMITS, parseSetInput } from '../utils/progressionEngine'
 import { unlockAudio } from '../utils/notify'
 import { routineExercises } from '../utils/sessionSets'
 import { platesPerSide } from '../utils/plates'
+import { clearDraft, readDraft, writeDraft } from '../utils/drafts'
+import useTodaySummary from '../hooks/useTodaySummary'
+import DaySummaryCard from './DaySummaryCard'
 import ExerciseNote from './ExerciseNote'
 import Stepper from './Stepper'
 import TodaySetList from './TodaySetList'
@@ -45,10 +48,14 @@ export default function WorkoutView({
   const weightStep = selectedExercise?.incrementStep ?? DEFAULT_STEP
   const { repMin, barWeight: bar } = withExerciseDefaults(selectedExercise)
 
-  const { todaySets, previousSets, recommendation, reload, loadedExerciseId } = useExerciseData(
+  const { todaySets, previousSets, recommendation, stall, reload, loadedExerciseId } = useExerciseData(
     selectedExercise,
     onError,
   )
+  // Set kaydı/silme sonrası ve dış yenilemelerde günün özeti yeniden okunur.
+  const [summaryKey, setSummaryKey] = useState(0)
+  const bumpSummary = () => setSummaryKey((key) => key + 1)
+  const daySummary = useTodaySummary(`${summaryKey}|${refreshToken}|${active}`, onError)
 
   const [weight, setWeight] = useState('')
   const [reps, setReps] = useState(repMin)
@@ -62,20 +69,45 @@ export default function WorkoutView({
   const savingRef = useRef(false) // Aynı frame'deki çift dokunuşa karşı senkron kilit
   const snapshotRef = useRef(null) // Düzenleme öncesi form değerleri (Vazgeç geri yükler)
   const prefilledFor = useRef(undefined)
+  // Formun "kullanıcı dokunmadı" hâli; taslak yalnızca bundan farklıysa yazılır.
+  const baselineRef = useRef(null)
+  const [draftRestored, setDraftRestored] = useState(false)
 
-  // Hareket değişince (ve açılışta) form, o hareketin verisi yüklenince öneriyle bir kez dolar.
-  // Set kaydı sonrası yeniden yükleme formu ezmez.
+  // Hareket değişince (ve açılışta) form, o hareketin verisi yüklenince bir kez dolar:
+  // 6 saatten yeni taslak varsa ondan, yoksa öneriden. Set kaydı sonrası yeniden yükleme formu ezmez.
   useEffect(() => {
     if (loadedExerciseId !== (selectedExercise?.id ?? null)) return
     if (prefilledFor.current === loadedExerciseId) return
     prefilledFor.current = loadedExerciseId
     snapshotRef.current = null
     setEditing(null)
-    setWeight(recommendation.weight ?? '')
-    setReps(recommendation.reps ?? repMin)
-    setRir(DEFAULT_RIR)
-    setIsWarmup(false)
+    const fromRecommendation = {
+      weight: recommendation.weight ?? '',
+      reps: recommendation.reps ?? repMin,
+      rir: DEFAULT_RIR,
+      isWarmup: false,
+    }
+    baselineRef.current = fromRecommendation
+    const draft = loadedExerciseId == null ? null : readDraft(loadedExerciseId)
+    const values = draft ?? fromRecommendation
+    setDraftRestored(Boolean(draft))
+    setWeight(values.weight)
+    setReps(values.reps)
+    setRir(values.rir)
+    setIsWarmup(values.isWarmup)
   }, [loadedExerciseId, selectedExercise, recommendation, repMin])
+
+  // Kaydedilmemiş değerler cihazda tutulur (sekme kapanırsa geri gelir). Düzenleme modunda yazılmaz.
+  useEffect(() => {
+    const id = selectedExercise?.id
+    if (id == null || prefilledFor.current !== id || loadedExerciseId !== id || editing != null) return undefined
+    const values = { weight, reps, rir, isWarmup }
+    const base = baselineRef.current
+    const untouched =
+      base && ['weight', 'reps', 'rir', 'isWarmup'].every((field) => String(base[field]) === String(values[field]))
+    const timer = setTimeout(() => (untouched ? clearDraft(id) : writeDraft(id, values)), 400)
+    return () => clearTimeout(timer)
+  }, [weight, reps, rir, isWarmup, selectedExercise, loadedExerciseId, editing])
 
   // Sekme değişimi: ayrılırken yarım düzenleme bırakılır (değerler geri gelir);
   // dönüşte Geçmiş'teki düzenleme/silmeler için veri yenilenir, form ezilmez.
@@ -141,8 +173,13 @@ export default function WorkoutView({
       } else {
         const { isPR } = await addSet(selectedExercise.id, payload)
         setIsWarmup(false)
+        // Kaydedilen değerler artık taslak değil; sonraki set için yeni başlangıç noktası.
+        clearDraft(selectedExercise.id)
+        baselineRef.current = { weight, reps, rir, isWarmup: false }
+        setDraftRestored(false)
         onSetSaved({ isPR, estimated1RM: value.estimated1RM })
       }
+      bumpSummary()
       await reload()
     } catch (error) {
       onError(`Set kaydedilemedi: ${error.message}`)
@@ -157,6 +194,7 @@ export default function WorkoutView({
       await deleteSetAndRenumber(set.id)
       if (editingSetId === set.id) cancelEdit()
       onSetDeleted(set)
+      bumpSummary()
       await reload()
     } catch (error) {
       onError(`Set silinemedi: ${error.message}`)
@@ -290,6 +328,17 @@ export default function WorkoutView({
       <section className="mb-6 rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-4">
         <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-emerald-400">Hedef Önerisi</p>
         <p className="text-base leading-relaxed text-slate-100">{recommendation.message}</p>
+        {draftRestored && (
+          <p className="mt-2 text-xs font-medium text-slate-400">Taslak geri yüklendi</p>
+        )}
+        {stall.stalled && (
+          <p
+            role="status"
+            className="mt-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm font-medium text-amber-200"
+          >
+            {stall.sessions} seanstır 1RM artmadı — deload düşün: {stall.deload} kg
+          </p>
+        )}
       </section>
 
       <Stepper
@@ -375,6 +424,7 @@ export default function WorkoutView({
           onEdit={handleEditSet}
           onDelete={handleDeleteSet}
         />
+        <DaySummaryCard summary={daySummary} />
       </section>
     </>
   )

@@ -142,3 +142,25 @@ describe('daySummary', () => {
     expect(daySummary([], new Map())).toEqual({ volume: 0, workingSets: 0, warmupSets: 0, prCount: 0, minutes: 0 })
   })
 })
+
+describe('exerciseStall', () => {
+  test('uses sessions before the cutoff and deloads from the last working weight', async () => {
+    const { exerciseStall } = await import('./stats')
+    const sets = [
+      set(1, 100, 5, at(1)),
+      set(1, 102.5, 5, at(3)),
+      set(1, 100, 5, at(5)),
+      set(1, 102.5, 4, at(7)),
+      set(1, 60, 5, at(8)),
+      set(1, 100, 5, at(8, 11)),
+      set(1, 40, 10, at(8, 9), { isWarmup: true }),
+      set(1, 150, 5, at(9)), // bugün: kesimden sonra, sayılmaz
+    ]
+    // seans en iyileri: 112.5, 115.3, 112.5, 112.5(102.5x4≈112.5), 112.5 → son 3 öncekini geçmiyor
+    expect(exerciseStall(sets, new Date(2026, 10, 9).getTime(), 2.5)).toEqual({ stalled: true, sessions: 3, deload: 90 })
+  })
+  test('not stalled → deload null', async () => {
+    const { exerciseStall } = await import('./stats')
+    expect(exerciseStall([set(1, 100, 5, at(1))], at(9), 2.5)).toEqual({ stalled: false, sessions: 0, deload: null })
+  })
+})

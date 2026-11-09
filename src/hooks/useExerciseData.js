@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { db } from '../db'
 import { getSetRecommendation } from '../utils/progressionEngine'
-import { recommendationOptions, splitHistory } from '../utils/sessionSets'
+import { recommendationOptions, splitHistory, startOfDay } from '../utils/sessionSets'
+import { exerciseStall } from '../utils/stats'
 
-const EMPTY = { exerciseId: null, todaySets: [], previousSets: [] }
+const EMPTY = { exerciseId: null, todaySets: [], previousSets: [], history: [] }
+const NO_STALL = { stalled: false, sessions: 0, deload: null }
 
 /**
  * Seçili hareketin bugünkü/önceki seans setleri ve öneri.
@@ -26,7 +28,7 @@ export default function useExerciseData(exercise, onError) {
     if (exerciseId == null) return // Boş seçim: render'da EMPTY türetilir
     const history = await db.sets.where('exerciseId').equals(exerciseId).sortBy('timestamp')
     if (requestId !== requestIdRef.current) return
-    setData({ exerciseId, ...splitHistory(history) })
+    setData({ exerciseId, history, ...splitHistory(history) })
   }, [exerciseId])
 
   useEffect(() => {
@@ -48,7 +50,15 @@ export default function useExerciseData(exercise, onError) {
     [previousSets, incrementStep, min, max, bodyweight],
   )
 
+  // Durma/deload: bugünden önceki seanslara göre.
+  const history = current ? data.history : EMPTY.history
+  const stall = useMemo(
+    () => (history.length ? exerciseStall(history, startOfDay(), incrementStep) : NO_STALL),
+    [history, incrementStep],
+  )
+
   return {
+    stall,
     todaySets: current ? data.todaySets : EMPTY.todaySets,
     previousSets,
     recommendation,

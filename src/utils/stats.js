@@ -114,3 +114,19 @@ export function daySummary(todaySets, priorBestByExercise) {
     minutes,
   }
 }
+
+/**
+ * Hareketin `beforeTs` öncesi seanslarına göre durma durumu.
+ * deload: son seansın çalışma ağırlığından (en ağır ısınma dışı set) hesaplanır; durma yoksa null.
+ */
+export function exerciseStall(sets, beforeTs, incrementStep) {
+  const past = sets.filter((set) => set.timestamp < beforeTs)
+  const status = stallStatus(sessionBests(past))
+  if (!status.stalled) return { ...status, deload: null }
+  const working = past.filter(isWorking)
+  const lastDay = dayStart(Math.max(...working.map((set) => set.timestamp)))
+  const workingWeight = Math.max(
+    ...working.filter((set) => set.timestamp >= lastDay).map((set) => Number(set.weight) || 0),
+  )
+  return { ...status, deload: deloadWeight(workingWeight, incrementStep) }
+}
