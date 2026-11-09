@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
-import { ArrowUpDown, Dumbbell, History } from 'lucide-react'
+import { ArrowUpDown, ChartLine, Dumbbell, History } from 'lucide-react'
 import { db, seedDatabase, isActive, addExercise, addRoutine, archiveExercise, archiveRoutine, renameRoutine, reorderExercises, restoreSet, updateExercise } from './db'
 import { beep, vibrate } from './utils/notify'
 import { getLastBackupAt, getRestAuto, getRestSeconds, needsBackupReminder } from './utils/settings'
 import useRestTimer from './hooks/useRestTimer'
 import RestTimerBar from './components/RestTimerBar'
 import HistoryView from './components/HistoryView'
+import StatsView from './components/StatsView'
 import Toast from './components/Toast'
 import ExercisePoolModal from './components/ExercisePoolModal'
 import ManageModal from './components/ManageModal'
@@ -20,6 +21,7 @@ import { initialToastState, toastReducer } from './utils/toastQueue'
 const TABS = [
   { key: 'workout', label: 'Antrenman', Icon: Dumbbell },
   { key: 'history', label: 'Geçmiş', Icon: History },
+  { key: 'stats', label: 'İstatistik', Icon: ChartLine },
 ]
 
 const firstExerciseId = (list, routineId) => routineExercises(list, routineId)[0]?.id ?? null
@@ -202,11 +204,20 @@ export default function App() {
           <div role="alert" className="mb-4 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">{storageError}</div>
         )}
         <AppHeader
-          title={activeTab === 'workout' ? 'Antrenman' : 'Geçmiş'}
+          title={TABS.find((tab) => tab.key === activeTab)?.label}
           backupReminder={backupReminder}
           onOpenSettings={() => setSettingsOpen(true)}
         />
 
+        {activeTab === 'stats' && (
+          <StatsView
+            key={restoreGeneration}
+            routines={routines}
+            exercises={exercises}
+            selectedExerciseId={exerciseId}
+            refreshToken={refreshToken}
+          />
+        )}
         {activeTab === 'history' && (
           <HistoryView key={restoreGeneration} exercises={exercises} refreshToken={refreshToken} onSetDeleted={handleSetDeleted} />
         )}
