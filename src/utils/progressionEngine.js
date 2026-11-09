@@ -36,11 +36,11 @@ export function estimate1RM(weight, reps) {
   return Math.round(calculate1RM(load, count) * 10) / 10
 }
 
-/** Hacim yükü = Σ(ağırlık × tekrar). Geçersiz setler atlanır, throw etmez. */
+/** Hacim yükü = Σ(ağırlık × tekrar). Isınma ve geçersiz setler atlanır, throw etmez. */
 export function calculateVolumeLoad(sets) {
   return Number(
     sets.reduce(
-      (total, set) => (isValidSet(set) ? total + Number(set.weight) * Number(set.reps) : total),
+      (total, set) => (isValidSet(set) && !set.isWarmup ? total + Number(set.weight) * Number(set.reps) : total),
       0,
     ).toFixed(2),
   )
@@ -82,7 +82,7 @@ export function parseSetInput({ weight, reps, rir }) {
 }
 
 // RIR'ı kaydedilmemiş eski setler bu değerle (hedef efor) kabul edilir.
-const DEFAULT_RIR = 2
+export const DEFAULT_RIR = 2
 
 // Kayan nokta hatalarını (ör. 22.500000001) gösterimden temizler.
 function kg(value) {
@@ -98,9 +98,13 @@ function kg(value) {
  * - En iyi set bile aralığın altında (< 6) kaldı: ağırlığı 1 adım düşür.
  * - Aksi halde aynı ağırlıkla tekrar artır (RIR ≥ 3 ise +2, değilse +1; tavan 8).
  */
-export function getSetRecommendation(previousSets, incrementStep = 2.5, repRange = DEFAULT_REP_RANGE) {
+export function getSetRecommendation(
+  previousSets,
+  { incrementStep = 2.5, repRange = DEFAULT_REP_RANGE, bodyweight = false } = {},
+) {
+  const empty = (message) => ({ weight: null, reps: null, message })
   if (!Array.isArray(previousSets) || previousSets.length === 0) {
-    return 'İlk antrenman: Kontrollü bir başlangıç ağırlığı seç ve hedef tekrar aralığında kal.'
+    return empty('İlk antrenman: Kontrollü bir başlangıç ağırlığı seç ve hedef tekrar aralığında kal.')
   }
 
   const step = finiteNumber(incrementStep, 'Ağırlık artışı')
@@ -110,10 +114,13 @@ export function getSetRecommendation(previousSets, incrementStep = 2.5, repRange
     throw new RangeError('Geçerli bir tekrar aralığı girilmelidir.')
   }
 
-  const sets = previousSets.filter(isValidSet)
-  if (sets.length === 0) return 'Önceki seansta geçerli set bulunamadı; kontrollü bir ağırlık seç.'
+  // Isınma setleri karara katılmaz.
+  const sets = previousSets.filter((set) => isValidSet(set) && !set.isWarmup)
+  if (sets.length === 0) {
+    return empty('Önceki seansta geçerli set bulunamadı; kontrollü bir ağırlık seç.')
+  }
 
-  // Çalışma ağırlığı = seanstaki en ağır yük; back-off/ısınma setleri öneriyi bozmasın.
+  // Çalışma ağırlığı = seanstaki en ağır yük; back-off setleri öneriyi bozmasın.
   const workingWeight = Math.max(...sets.map((set) => Number(set.weight)))
   const working = sets.filter((set) => Number(set.weight) === workingWeight)
   const reps = working.map((set) => Number(set.reps))
@@ -125,24 +132,51 @@ export function getSetRecommendation(previousSets, incrementStep = 2.5, repRange
   const avgRir = rirs.reduce((sum, value) => sum + value, 0) / rirs.length
   const rirLabel = `ort. RIR ${Number(avgRir.toFixed(1))}`
 
-  // Üst sınıra (8) ulaşıldı → ağırlık artar. RIR sadece artış miktarını belirler.
-  if (bestReps >= max) {
-    if (avgRir >= 4) {
-      return `Hedef: ${kg(workingWeight + step * 2)} kg ile ${min}–${max} tekrar. Önceki seans çok rahattı (${rirLabel}).`
+  // Vücut ağırlığı: yük değişmez, yalnızca tekrar artar.
+  if (bodyweight) {
+    if (bestReps >= max) {
+      return { weight: 0, reps: max, message: 'Tavana ulaştın: hareketi zorlaştır veya ağırlık ekle.' }
     }
-    return `Hedef: ${kg(workingWeight + step)} kg ile ${min}–${max} tekrar (${rirLabel}).`
+    const target = Math.min(max, Math.max(min, bestReps + (avgRir >= 3 ? 2 : 1)))
+    return { weight: 0, reps: target, message: `Hedef: ${target} tekrar; setlerde formu koru (${rirLabel}).` }
   }
 
-  // En iyi set bile alt sınırın (6) altında kaldı → ağırlık düşer (0 kg'ın altına inmez).
+  // Üst sınıra ulaşıldı → ağırlık artar. RIR sadece artış miktarını belirler.
+  if (bestReps >= max) {
+    if (avgRir >= 4) {
+      const weight = kg(workingWeight + step * 2)
+      return {
+        weight,
+        reps: min,
+        message: `Hedef: ${weight} kg ile ${min}–${max} tekrar. Önceki seans çok rahattı (${rirLabel}).`,
+      }
+    }
+    const weight = kg(workingWeight + step)
+    return { weight, reps: min, message: `Hedef: ${weight} kg ile ${min}–${max} tekrar (${rirLabel}).` }
+  }
+
+  // En iyi set bile alt sınırın altında kaldı → ağırlık düşer (0 kg'ın altına inmez).
   if (bestReps < min) {
     const lowered = kg(workingWeight - step)
     if (lowered < workingWeight) {
-      return `Hedef: ${lowered} kg ile ${min}–${max} tekrar. ${min} tekrarın altında kaldın (en iyi set ${bestReps} tekrar).`
+      return {
+        weight: lowered,
+        reps: min,
+        message: `Hedef: ${lowered} kg ile ${min}–${max} tekrar. ${min} tekrarın altında kaldın (en iyi set ${bestReps} tekrar).`,
+      }
     }
-    return `Hedef: ${kg(workingWeight)} kg ile ${min} tekrar; ${min} tekrarın altında kaldın, formu koru.`
+    return {
+      weight: kg(workingWeight),
+      reps: min,
+      message: `Hedef: ${kg(workingWeight)} kg ile ${min} tekrar; ${min} tekrarın altında kaldın, formu koru.`,
+    }
   }
 
   const repJump = avgRir >= 3 ? 2 : 1
   const nextReps = Math.min(max, bestReps + repJump)
-  return `Hedef: ${kg(workingWeight)} kg ile ${nextReps} tekrar; setlerde formu koru (${rirLabel}).`
+  return {
+    weight: kg(workingWeight),
+    reps: nextReps,
+    message: `Hedef: ${kg(workingWeight)} kg ile ${nextReps} tekrar; setlerde formu koru (${rirLabel}).`,
+  }
 }

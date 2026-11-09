@@ -14,10 +14,9 @@ import {
 import HistoryView from './components/HistoryView'
 import ExercisePoolModal from './components/ExercisePoolModal'
 import ManageModal from './components/ManageModal'
-import { LIMITS, getSetRecommendation, parseSetInput } from './utils/progressionEngine'
+import { DEFAULT_RIR, LIMITS, getSetRecommendation, parseSetInput } from './utils/progressionEngine'
 
 const DEFAULT_STEP = 2.5
-const DEFAULT_RIR = 2
 
 function startOfDay(timestamp = Date.now()) {
   const d = new Date(timestamp)
@@ -79,7 +78,7 @@ export default function App() {
   const [routineId, setRoutineId] = useState(null)
   const [exercises, setExercises] = useState([])
   const [exerciseId, setExerciseId] = useState(null)
-  const [recommendation, setRecommendation] = useState(() => getSetRecommendation(null))
+  const [recommendation, setRecommendation] = useState(() => getSetRecommendation([]))
   const [weight, setWeight] = useState('')
   const [reps, setReps] = useState(8)
   const [rir, setRir] = useState(DEFAULT_RIR)
@@ -109,7 +108,7 @@ export default function App() {
     if (!id) {
       setPreviousSets([])
       setTodaySets([])
-      setRecommendation(getSetRecommendation(null))
+      setRecommendation(getSetRecommendation([]))
       return
     }
 
@@ -123,7 +122,7 @@ export default function App() {
       setPreviousSets(previous)
 
       const step = list?.find((ex) => ex.id === id)?.incrementStep ?? DEFAULT_STEP
-      setRecommendation(getSetRecommendation(previous, step))
+      setRecommendation(getSetRecommendation(previous, { incrementStep: step }))
 
       if (prefill) {
         const lastSet = previous[previous.length - 1]
@@ -437,7 +436,7 @@ export default function App() {
             Hedef Önerisi
           </p>
           <p className="text-base leading-relaxed text-slate-100">
-            {recommendation}
+            {recommendation.message}
           </p>
         </section>
 
