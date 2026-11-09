@@ -5,12 +5,19 @@ import { EQUIPMENT_TYPES, EXERCISE_POOL } from '../data/exercisePool'
 
 /**
  * 'Hareket Ekle' modalı: havuzdan seçim veya manuel isim girişi.
- * onAdd({ name, targetMuscle, equipmentType, incrementStep }) çağrılır, ardından modal kapanır.
+ * onAdd({ name, targetMuscle, equipmentType, incrementStep, repMin, repMax }) çağrılır, ardından modal kapanır.
  */
+const REP_PRESETS = [
+  { label: '6–8', repMin: 6, repMax: 8 },
+  { label: '8–12', repMin: 8, repMax: 12 },
+  { label: '10–15', repMin: 10, repMax: 15 },
+]
+
 export default function ExercisePoolModal({ routineName, existingNames, onAdd, onClose }) {
   const [manual, setManual] = useState(false)
   const [name, setName] = useState('')
   const [equipmentType, setEquipmentType] = useState('machine')
+  const [repPreset, setRepPreset] = useState(0)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
@@ -46,6 +53,8 @@ export default function ExercisePoolModal({ routineName, existingNames, onAdd, o
       targetMuscle: 'Genel',
       equipmentType: equipment.value,
       incrementStep: equipment.step,
+      repMin: REP_PRESETS[repPreset].repMin,
+      repMax: REP_PRESETS[repPreset].repMax,
     })
   }
 
@@ -113,6 +122,24 @@ export default function ExercisePoolModal({ routineName, existingNames, onAdd, o
                 </option>
               ))}
             </select>
+            <p className="block text-sm font-medium text-slate-400">Tekrar aralığı</p>
+            <div className="grid grid-cols-3 gap-2">
+              {REP_PRESETS.map((preset, index) => (
+                <button
+                  key={preset.label}
+                  type="button"
+                  aria-pressed={repPreset === index}
+                  onClick={() => setRepPreset(index)}
+                  className={`h-12 rounded-2xl border text-base font-semibold ${
+                    repPreset === index
+                      ? 'border-emerald-500 bg-emerald-500/15 text-emerald-300'
+                      : 'border-slate-800 bg-slate-950 text-white active:bg-slate-800'
+                  }`}
+                >
+                  {preset.label}
+                </button>
+              ))}
+            </div>
             <button
               type="submit"
               disabled={!name.trim() || busy}
@@ -152,6 +179,8 @@ export default function ExercisePoolModal({ routineName, existingNames, onAdd, o
                                 targetMuscle: poolItem.muscle,
                                 equipmentType: poolItem.equipmentType,
                                 incrementStep: poolItem.incrementStep,
+                                repMin: poolItem.repMin,
+                                repMax: poolItem.repMax,
                               })
                             }
                             className="flex min-h-12 w-full items-center justify-between gap-2 rounded-2xl border border-slate-800 bg-slate-950 px-4 py-2 text-left text-sm font-semibold text-white active:bg-slate-800 disabled:opacity-40"

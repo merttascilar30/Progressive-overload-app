@@ -9,8 +9,29 @@ export const EQUIPMENT_TYPES = [
   { value: 'other', label: 'Diğer', step: 2.5 },
 ]
 
+// Bileşik hareketler 6–8, baldır 12–20, geri kalan izolasyon 10–15.
+const COMPOUND_NAMES = new Set([
+  'Plate Loaded Incline Chest Press',
+  'Plate Loaded Chest Press',
+  'Lat Pulldown',
+  'Cable Row',
+  'Plate Loaded Wide Grip Row',
+  'T-Bar Row',
+  'Shoulder Press Machine',
+  'Hack Squat',
+])
+
 function item(name, muscle, equipmentType, incrementStep) {
-  return { name, muscle, equipmentType, incrementStep }
+  let repMin = 10
+  let repMax = 15
+  if (COMPOUND_NAMES.has(name)) {
+    repMin = 6
+    repMax = 8
+  } else if (name === 'Calf Raises Machine') {
+    repMin = 12
+    repMax = 20
+  }
+  return { name, muscle, equipmentType, incrementStep, repMin, repMax }
 }
 
 export const EXERCISE_POOL = [
