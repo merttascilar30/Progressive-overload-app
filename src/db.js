@@ -1,5 +1,6 @@
 import Dexie from 'dexie';
 import { estimate1RM } from './utils/progressionEngine';
+import { EXERCISE_POOL } from './data/exercisePool';
 
 export const db = new Dexie('overloadDB');
 
@@ -51,6 +52,30 @@ db.version(4)
     }),
   );
 
+// v5: Kişisel hareket havuzu. Elle eklenen hareketler burada kalıcı tutulur.
+// Upgrade, adı sabit havuzda olmayan mevcut hareketleri (normalize, tekil) havuza tohumlar.
+db.version(5)
+  .stores({
+    routines: '++id, name',
+    exercises: '++id, name, targetMuscle, equipmentType, routineId',
+    workouts: '++id, date, name, isCompleted',
+    sets: '++id, workoutId, exerciseId, timestamp',
+    meta: 'key',
+    customPool: '++id, &nameKey',
+  })
+  .upgrade(async (tx) => {
+    const seen = new Set();
+    const rows = [];
+    const exercises = (await tx.table('exercises').toArray()).sort((a, b) => a.id - b.id);
+    for (const ex of exercises) {
+      const nameKey = normalizeName(ex.name);
+      if (!nameKey || seen.has(nameKey) || STATIC_POOL_KEYS.has(nameKey)) continue;
+      seen.add(nameKey);
+      rows.push(customPoolRow(ex, nameKey, Date.now()));
+    }
+    if (rows.length) await tx.table('customPool').bulkAdd(rows);
+  });
+
 export const REP_LIMITS = { min: 1, max: 50 };
 export const NOTE_MAX_LENGTH = 200;
 export const BAR_WEIGHTS = [20, 15, 10];
@@ -93,6 +118,23 @@ export function toDateString(date = new Date()) {
 }
 
 const normalizeName = (name) => String(name ?? '').trim().toLowerCase();
+
+const STATIC_POOL_KEYS = new Set(
+  EXERCISE_POOL.flatMap((category) => category.items.map((item) => normalizeName(item.name))),
+);
+
+function customPoolRow(source, nameKey, createdAt) {
+  return {
+    name: String(source.name).trim(),
+    nameKey,
+    targetMuscle: source.targetMuscle || 'Genel',
+    equipmentType: source.equipmentType || 'other',
+    incrementStep: Number(source.incrementStep) > 0 ? Number(source.incrementStep) : 2.5,
+    repMin: Number.isInteger(source.repMin) ? source.repMin : EXERCISE_DEFAULTS.repMin,
+    repMax: Number.isInteger(source.repMax) ? source.repMax : EXERCISE_DEFAULTS.repMax,
+    createdAt,
+  };
+}
 
 let seedPromise = null;
 
@@ -423,4 +465,77 @@ export async function archiveRoutine(routineId) {
     await db.exercises.where('routineId').equals(routineId).modify({ archived: true });
     await db.routines.update(routineId, { archived: true });
   });
+}
+
+// ---- Sayfalama / istatistik sorguları (salt okuma) ----
+
+/** timestamp >= ts olan tüm setler. */
+export function getSetsSince(ts) {
+  return db.sets.where('timestamp').aboveOrEqual(ts).toArray();
+}
+
+/** from <= timestamp < to. */
+export function getSetsBetween(from, to) {
+  return db.sets.where('timestamp').between(from, to, true, false).toArray();
+}
+
+/** En eski setin zaman damgası ya da null. */
+export async function oldestSetTimestamp() {
+  const first = await db.sets.orderBy('timestamp').first();
+  return first?.timestamp ?? null;
+}
+
+/**
+ * Her hareket için ts'den önceki SON antrenman gününün en iyi 1RM'i (ısınma hariç).
+ * Dönüş: Map<exerciseId, number>; kaydı olmayan hareket haritada yer almaz.
+ */
+export async function lastBestBefore(exerciseIds, ts) {
+  const result = new Map();
+  for (const exerciseId of exerciseIds) {
+    const sets = await db.sets
+      .where('exerciseId').equals(exerciseId)
+      .and((set) => set.timestamp < ts && !set.isWarmup && estimate1RM(set.weight, set.reps) != null)
+      .toArray();
+    if (!sets.length) continue;
+    const lastTs = Math.max(...sets.map((set) => set.timestamp));
+    const day = new Date(lastTs);
+    day.setHours(0, 0, 0, 0);
+    const dayStart = day.getTime();
+    const best = Math.max(
+      ...sets.filter((set) => set.timestamp >= dayStart).map((set) => estimate1RM(set.weight, set.reps)),
+    );
+    result.set(exerciseId, best);
+  }
+  return result;
+}
+
+// ---- Kişisel hareket havuzu ----
+
+export async function listCustomPool() {
+  const rows = await db.customPool.toArray();
+  return rows.sort((a, b) => a.name.localeCompare(b.name, 'tr'));
+}
+
+/**
+ * Elle eklenen hareketi kişisel havuza ekler ya da ayarlarını günceller.
+ * Ad sabit havuzdaysa eklenmez ve null döner. Dönüş: havuz kaydının id'si.
+ */
+export async function upsertCustomPoolItem(item) {
+  const nameKey = normalizeName(item?.name);
+  if (!nameKey) throw new Error('Hareket adı boş olamaz.');
+  if (STATIC_POOL_KEYS.has(nameKey)) return null;
+  return db.transaction('rw', db.customPool, async () => {
+    const existing = await db.customPool.where('nameKey').equals(nameKey).first();
+    const row = customPoolRow({ ...existing, ...item, name: existing?.name ?? item.name }, nameKey, existing?.createdAt ?? Date.now());
+    if (existing) {
+      await db.customPool.update(existing.id, row);
+      return existing.id;
+    }
+    return db.customPool.add(row);
+  });
+}
+
+/** Havuzdan kaldırır; günlerdeki hareketler etkilenmez. */
+export function removeCustomPoolItem(id) {
+  return db.customPool.delete(id);
 }

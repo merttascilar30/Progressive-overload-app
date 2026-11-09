@@ -5,6 +5,12 @@ import {
   addRoutine,
   addSet,
   db,
+  getSetsBetween,
+  lastBestBefore,
+  listCustomPool,
+  oldestSetTimestamp,
+  removeCustomPoolItem,
+  upsertCustomPoolItem,
   deleteSetAndRenumber,
   renameRoutine,
   reorderExercises,
@@ -46,7 +52,7 @@ describe('schema v4', () => {
     legacy.close()
 
     await db.open()
-    expect(db.verno).toBe(4)
+    expect(db.verno).toBeGreaterThanOrEqual(4)
     const rows = await exercisesOf(routineId)
     expect(rows).toHaveLength(3)
     for (const ex of rows) expect(ex.order).toBe(ex.id)
@@ -248,5 +254,84 @@ describe('restoreSet', () => {
     expect(rows.map((set) => set.setNumber)).toEqual([1, 2, 3, 4])
     expect(rows.map((set) => set.id)).toEqual([s1, s2, s3, s4])
     expect((await db.sets.get(s2)).weight).toBe(62.5)
+  })
+})
+
+describe('schema v5 custom pool', () => {
+  test('v5 seeds custom pool from manually added exercises', async () => {
+    await db.delete()
+    const legacy = new Dexie('overloadDB')
+    legacy.version(4).stores({
+      routines: '++id, name',
+      exercises: '++id, name, targetMuscle, equipmentType, routineId',
+      workouts: '++id, date, name, isCompleted',
+      sets: '++id, workoutId, exerciseId, timestamp',
+      meta: 'key',
+    })
+    await legacy.open()
+    const routineId = await legacy.routines.add({ name: 'Legs' })
+    await legacy.exercises.bulkAdd([
+      { name: 'Hip Thrust', targetMuscle: 'Glutes', equipmentType: 'barbell', incrementStep: 2.5, repMin: 8, repMax: 12, routineId },
+      { name: 'hip thrust ', targetMuscle: 'Legs', equipmentType: 'machine', routineId: routineId + 1, archived: true },
+      { name: 'Lat Pulldown', targetMuscle: 'Back', equipmentType: 'cable', routineId },
+    ])
+    legacy.close()
+
+    await db.open()
+    expect(db.verno).toBe(5)
+    const pool = await listCustomPool()
+    expect(pool).toHaveLength(1)
+    expect(pool[0]).toMatchObject({ name: 'Hip Thrust', nameKey: 'hip thrust', targetMuscle: 'Glutes', repMin: 8, repMax: 12 })
+  })
+
+  test('upsert dedupes by normalized name and skips static pool names', async () => {
+    const id = await upsertCustomPoolItem({ name: 'Cable Crunch', targetMuscle: 'Abs', equipmentType: 'cable', incrementStep: 2.5, repMin: 10, repMax: 15 })
+    expect(id).toEqual(expect.any(Number))
+    const again = await upsertCustomPoolItem({ name: ' cable crunch', targetMuscle: 'Core', equipmentType: 'cable', incrementStep: 5, repMin: 12, repMax: 20 })
+    expect(again).toBe(id)
+    const pool = await listCustomPool()
+    expect(pool).toHaveLength(1)
+    expect(pool[0]).toMatchObject({ name: 'Cable Crunch', targetMuscle: 'Core', incrementStep: 5, repMin: 12, repMax: 20 })
+    expect(await upsertCustomPoolItem({ name: 'lat pulldown', targetMuscle: 'Back' })).toBeNull()
+    expect(await listCustomPool()).toHaveLength(1)
+  })
+
+  test('remove does not touch exercises', async () => {
+    const routineId = await addRoutine('Core')
+    await addExercise({ name: 'Cable Crunch', routineId })
+    const id = await upsertCustomPoolItem({ name: 'Cable Crunch', targetMuscle: 'Abs' })
+    await removeCustomPoolItem(id)
+    expect(await listCustomPool()).toHaveLength(0)
+    expect(await db.exercises.where('routineId').equals(routineId).count()).toBe(1)
+  })
+})
+
+describe('paging queries', () => {
+  const at = (d, h = 10) => new Date(2026, 10, d, h).getTime()
+  async function seedSets(rows) {
+    await db.sets.bulkAdd(rows.map(([exerciseId, weight, reps, timestamp, isWarmup = false]) => ({ workoutId: 1, exerciseId, setNumber: 1, weight, reps, rir: 2, timestamp, isWarmup })))
+  }
+
+  test('getSetsBetween bounds and oldestSetTimestamp', async () => {
+    expect(await oldestSetTimestamp()).toBeNull()
+    await seedSets([[1, 50, 5, at(1)], [1, 50, 5, at(5)], [1, 50, 5, at(9)]])
+    const rows = await getSetsBetween(at(5), at(9))
+    expect(rows.map((s) => s.timestamp)).toEqual([at(5)])
+    expect(await oldestSetTimestamp()).toBe(at(1))
+  })
+
+  test('lastBestBefore uses the last training day before ts, excluding warmups', async () => {
+    await seedSets([
+      [1, 100, 1, at(1)],
+      [1, 80, 1, at(3)],
+      [1, 90, 1, at(3), true],
+      [1, 70, 1, at(3, 12)],
+      [1, 200, 1, at(9)],
+      [2, 40, 1, at(2)],
+    ])
+    const best = await lastBestBefore([1, 2, 3], at(9, 0))
+    expect(best.get(1)).toBe(80)
+    expect(best.get(2)).toBe(40)
+    expect(best.has(3)).toBe(false)
   })
 })

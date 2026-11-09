@@ -1,8 +1,10 @@
 import { db } from '../db'
 import { markBackupNow } from './settings'
 
-const TABLES = ['routines', 'exercises', 'workouts', 'sets']
-const FORMAT_VERSION = 1
+const TABLES = ['routines', 'exercises', 'workouts', 'sets', 'customPool']
+// Format 1 yedeklerde bu tablolar yoktu; okunurken boş dizi kabul edilir.
+const OPTIONAL_TABLES = ['customPool']
+const FORMAT_VERSION = 2
 
 function dateStamp() {
   const d = new Date()
@@ -17,7 +19,7 @@ function countRecords(data) {
 /** Tüm veritabanını JSON dosyası olarak indirir. */
 export async function exportBackup() {
   const data = {}
-  await db.transaction('r', db.routines, db.exercises, db.workouts, db.sets, async () => {
+  await db.transaction('r', TABLES.map((table) => db.table(table)), async () => {
     for (const table of TABLES) data[table] = await db.table(table).toArray()
   })
 
@@ -62,6 +64,7 @@ export async function readBackupFile(file) {
   if (Number(payload.formatVersion) > FORMAT_VERSION) {
     throw new Error('Bu yedek uygulamanın daha yeni bir sürümüyle alınmış.')
   }
+  for (const table of OPTIONAL_TABLES) payload.data[table] ??= []
   for (const table of TABLES) {
     const rows = payload.data[table]
     if (!Array.isArray(rows)) throw new Error(`Yedekte "${table}" tablosu eksik.`)
@@ -82,10 +85,10 @@ export async function readBackupFile(file) {
  * herhangi bir adım başarısız olursa hiçbir şey silinmez.
  */
 export async function restoreBackup(payload) {
-  await db.transaction('rw', db.routines, db.exercises, db.workouts, db.sets, async () => {
+  await db.transaction('rw', TABLES.map((table) => db.table(table)), async () => {
     for (const table of TABLES) {
       await db.table(table).clear()
-      await db.table(table).bulkAdd(payload.data[table])
+      await db.table(table).bulkAdd(payload.data[table] ?? [])
     }
   })
 }
