@@ -40,6 +40,8 @@ export function beep(offsets = [0, 0.3, 0.6], frequency = 880) {
 }
 
 export function vibrate(pattern) {
+  // Chrome, sayfaya hiç dokunulmadan yapılan çağrıyı engeller ve konsola hata yazar.
+  if (navigator.userActivation && !navigator.userActivation.hasBeenActive) return
   try {
     navigator.vibrate?.(pattern)
   } catch {
