@@ -71,6 +71,9 @@ export default function App() {
 
   // Yedekten dönünce katalog, seçim ve görünür listeler yeniden yüklenir.
   async function handleRestored() {
+    // Eski verideki seti geri getirebilecek "Geri al" ve eski sete ait sayaç kapanır.
+    setToast(null)
+    rest.stop()
     const { routineList, list } = await refreshCatalog()
     const firstRoutineId = routineList.find(isActive)?.id ?? null
     setRoutineId(firstRoutineId)
