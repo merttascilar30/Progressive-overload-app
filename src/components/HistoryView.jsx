@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Check, Pencil, Trash2, X } from 'lucide-react'
 import { db, deleteSetAndRenumber, updateSet } from '../db'
-import { calculateVolumeLoad, estimate1RM, parseSetInput } from '../utils/progressionEngine'
+import { DEFAULT_RIR, calculateVolumeLoad, estimate1RM, parseSetInput } from '../utils/progressionEngine'
 
 const dateFormatter = new Intl.DateTimeFormat('tr-TR', {
   day: 'numeric',
@@ -137,7 +137,7 @@ export default function HistoryView({ exercises }) {
     setDraft({
       weight: set.weight,
       reps: set.reps,
-      rir: typeof set.rir === 'number' ? set.rir : 0,
+      rir: typeof set.rir === 'number' ? set.rir : DEFAULT_RIR,
     })
   }
 
