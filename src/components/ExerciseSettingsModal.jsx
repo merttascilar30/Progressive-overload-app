@@ -56,6 +56,17 @@ export default function ExerciseSettingsModal({ exercise, onSave, onDelete, onCl
     }
   }
 
+  // Aralık hep geçerli kalsın: bir sınır diğerini geçerse diğeri de onunla birlikte kayar.
+  function changeRepMin(value) {
+    setRepMin(value)
+    if (value > repMax) setRepMax(value)
+  }
+
+  function changeRepMax(value) {
+    setRepMax(value)
+    if (value < repMin) setRepMin(value)
+  }
+
   function handleSubmit(e) {
     e.preventDefault()
     if (!name.trim()) return
@@ -114,9 +125,9 @@ export default function ExerciseSettingsModal({ exercise, onSave, onDelete, onCl
             <div>
               <p className="mb-1 text-sm font-medium text-slate-400">Tekrar aralığı</p>
               <div className="flex items-center gap-3">
-                <MiniStepper label="En az tekrar" value={repMin} onChange={setRepMin} />
+                <MiniStepper label="En az tekrar" value={repMin} onChange={changeRepMin} />
                 <span className="text-slate-500">–</span>
-                <MiniStepper label="En çok tekrar" value={repMax} onChange={setRepMax} />
+                <MiniStepper label="En çok tekrar" value={repMax} onChange={changeRepMax} />
               </div>
             </div>
 
