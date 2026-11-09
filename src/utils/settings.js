@@ -59,3 +59,11 @@ export function getLastBackupAt() {
 export function markBackupNow() {
   write(KEYS.lastBackupAt, Date.now())
 }
+
+const BACKUP_REMINDER_MS = 7 * 24 * 60 * 60 * 1000
+
+export function needsBackupReminder({ lastBackupAt, hasSets, now }) {
+  if (!hasSets) return false
+  if (lastBackupAt == null) return true
+  return now - lastBackupAt > BACKUP_REMINDER_MS
+}

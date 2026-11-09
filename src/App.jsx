@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { ArrowUpDown, Dumbbell, History } from 'lucide-react'
 import { db, seedDatabase, isActive, addExercise, archiveExercise, archiveRoutine, renameRoutine, reorderExercises, restoreSet, updateExercise } from './db'
 import { beep, vibrate } from './utils/notify'
-import { getRestAuto, getRestSeconds } from './utils/settings'
+import { getLastBackupAt, getRestAuto, getRestSeconds, needsBackupReminder } from './utils/settings'
 import useRestTimer from './hooks/useRestTimer'
 import RestTimerBar from './components/RestTimerBar'
 import HistoryView from './components/HistoryView'
@@ -12,6 +12,8 @@ import ManageModal from './components/ManageModal'
 import ExerciseSettingsModal from './components/ExerciseSettingsModal'
 import WorkoutView from './components/WorkoutView'
 import ReorderExercises from './components/ReorderExercises'
+import AppHeader from './components/AppHeader'
+import SettingsSheet from './components/SettingsSheet'
 import { routineExercises } from './utils/sessionSets'
 
 const TABS = [
@@ -36,6 +38,8 @@ export default function App() {
   const dismissToast = useCallback(() => setToast(null), [])
   // Geri alma sonrası görünür listelerin yeniden okunması için artar.
   const [refreshToken, setRefreshToken] = useState(0)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [backupReminder, setBackupReminder] = useState(false)
 
   const rest = useRestTimer()
   const restVisible = rest.endAt != null
@@ -51,6 +55,30 @@ export default function App() {
     return { routineList, list }
   }, [])
 
+  const refreshBackupReminder = useCallback(async () => {
+    try {
+      const hasSets = (await db.sets.count()) > 0
+      setBackupReminder(needsBackupReminder({ lastBackupAt: getLastBackupAt(), hasSets, now: Date.now() }))
+    } catch {
+      setBackupReminder(false)
+    }
+  }, [])
+
+  const closeSettings = useCallback(() => {
+    setSettingsOpen(false)
+    refreshBackupReminder()
+  }, [refreshBackupReminder])
+
+  // Yedekten dönünce katalog, seçim ve görünür listeler yeniden yüklenir.
+  async function handleRestored() {
+    const { routineList, list } = await refreshCatalog()
+    const firstRoutineId = routineList.find(isActive)?.id ?? null
+    setRoutineId(firstRoutineId)
+    setExerciseId(firstExerciseId(list, firstRoutineId))
+    setRefreshToken((token) => token + 1)
+    await refreshBackupReminder()
+  }
+
   useEffect(() => {
     let cancelled = false
     seedDatabase()
@@ -62,12 +90,13 @@ export default function App() {
         const firstRoutineId = routineList.find(isActive)?.id ?? null
         setRoutineId(firstRoutineId)
         setExerciseId(firstExerciseId(list, firstRoutineId))
+        refreshBackupReminder()
       })
       .catch((error) => {
         if (!cancelled) setStorageError(`Uygulama verisi yüklenemedi: ${error.message}`)
       })
     return () => { cancelled = true }
-  }, [])
+  }, [refreshBackupReminder])
 
   function selectExercise(nextId) {
     setExerciseId(nextId)
@@ -163,17 +192,11 @@ export default function App() {
         {storageError && (
           <div role="alert" className="mb-4 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">{storageError}</div>
         )}
-        <header className="mb-6 flex items-center gap-3">
-          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-emerald-500/15 text-emerald-400">
-            <Dumbbell className="h-6 w-6" strokeWidth={2.2} />
-          </div>
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-400">Overload</p>
-            <h1 className="text-2xl font-bold tracking-tight text-white">
-              {activeTab === 'workout' ? 'Antrenman' : 'Geçmiş'}
-            </h1>
-          </div>
-        </header>
+        <AppHeader
+          title={activeTab === 'workout' ? 'Antrenman' : 'Geçmiş'}
+          backupReminder={backupReminder}
+          onOpenSettings={() => setSettingsOpen(true)}
+        />
 
         {activeTab === 'history' && (
           <HistoryView exercises={exercises} refreshToken={refreshToken} onSetDeleted={handleSetDeleted} />
@@ -229,6 +252,7 @@ export default function App() {
         </div>
       </nav>
 
+      {settingsOpen && <SettingsSheet onClose={closeSettings} onRestored={handleRestored} />}
       {modal === 'routine-add' && (
         <ManageModal title="Yeni Antrenman Günü" inputLabel="Gün adı" startMode="input" submitLabel="Ekle" onSubmit={submitAddRoutine} onClose={closeModal} />
       )}
