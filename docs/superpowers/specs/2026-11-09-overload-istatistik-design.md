@@ -24,7 +24,7 @@ görünür; `npm test`, `npm run lint`, `npm run build` temiz geçer.
 - Elle eklenen hareket, hareket ekleme havuzuna kalıcı olarak eklenir.
 
 ### Varsayımlar (itiraz edilebilir)
-- Haftalık set: takvim haftası değil, **son 7 gün** (önceki 7 günle kıyas).
+- Haftalık set: **takvim haftası, Pazartesi 00:00 (yerel saat) başlar**; bu hafta (Pzt → şimdi) önceki tam haftayla (Pzt–Paz) kıyaslanır. (Kullanıcı kararı)
 - Grafik varsayılan aralığı **3 Ay**; seçenekler 1A / 3A / 6A / Tümü.
 - Durma: son 3 seansın hiçbiri önceki en iyi 1RM'i geçmediyse (en az 4 seans gerekir).
 - Deload önerisi: çalışma ağırlığının %90'ı, hareketin `incrementStep`'ine aşağı yuvarlanmış.
@@ -42,8 +42,9 @@ fonksiyonlarda (`src/utils/stats.js`) toplanır ve birim testlidir; bileşenler 
 - `dailyBest1RM(sets) → [{ day: number (gün başı ms), value: number }]` — artan gün sırası;
   `estimate1RM` null olan setler atlanır.
 - `filterRange(points, range, now)` — `range ∈ '1m' | '3m' | '6m' | 'all'`.
-- `weeklyMuscleSets(sets, exercisesById, now) → [{ muscle, count, previous }]` — son 7 gün ve
-  önceki 7 gün çalışma seti sayısı; `muscle = exercise.targetMuscle || 'Genel'`; count'a göre azalan.
+- `weekStart(now) → number` — `now`un haftasının Pazartesi 00:00 (yerel) zaman damgası.
+- `weeklyMuscleSets(sets, exercisesById, now) → [{ muscle, count, previous }]` — bu takvim haftası (Pzt 00:00 → now) ve
+  önceki tam hafta çalışma seti sayısı; `muscle = exercise.targetMuscle || 'Genel'`; count'a göre azalan.
 - `stallStatus(sessionBests: number[]) → { stalled: boolean, sessions: number }` — en eski → en yeni
   seans en iyi 1RM'leri; `stalled` = uzunluk ≥ 4 ve son 3'ün maksimumu ≤ öncekilerin maksimumu.
 - `deloadWeight(workingWeight, incrementStep) → number` — `floor(0.9 × w / step) × step`, ≥ 0.
@@ -67,7 +68,7 @@ fonksiyonlarda (`src/utils/stats.js`) toplanır ve birim testlidir; bileşenler 
   çizgi + noktalar, y ekseninde min/max etiketi, x ekseninde ilk/son tarih; başlıkta son değer ve
   dönem farkı ("+7.5 kg"); noktaya dokununca tarih + değer etiketi. 0–1 nokta: "Grafik için en az
   iki gün kayıt gerekli." mesajı.
-- **"Son 7 gün · kas grupları":** yatay çubuklar (en büyük = %100), sağda sayı ve önceki 7 güne
+- **"Bu hafta · kas grupları"** (alt başlıkta "Pzt {tarih}'ten beri"): yatay çubuklar (en büyük = %100), sağda sayı ve geçen haftaya
   göre fark (+2 / −1). Veri yoksa boş durum metni.
 - **"Dikkat":** `stallStatus` duran hareketlerin listesi, her biri "X seanstır artmadı · deload:
   Y kg"; dokununca o hareket grafikte seçilir.
@@ -140,7 +141,7 @@ hatası sekme içinde `role="alert"` ile gösterilir. localStorage hataları ses
 
 ## 9. Test
 
-- **Birim:** `stats.js` tüm fonksiyonlar (ısınma hariç tutma, aralık filtresi, durma sınırları
+- **Birim:** `stats.js` tüm fonksiyonlar (ısınma hariç tutma, aralık filtresi, `weekStart` (Pazar/Pazartesi sınırı), durma sınırları
   3/4 seans, deload yuvarlama, özet süre/rekor), `drafts.js` (süre aşımı), toast kuyruğu mantığı
   (saf reducer olarak).
 - **DB (fake-indexeddb):** v4→v5 upgrade tohumlama; `upsertCustomPoolItem` tekillik ve sabit havuz
