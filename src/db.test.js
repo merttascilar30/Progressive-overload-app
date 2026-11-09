@@ -2,6 +2,7 @@ import Dexie from 'dexie'
 import { beforeEach, describe, expect, test } from 'vitest'
 import {
   addExercise,
+  addRoutine,
   addSet,
   db,
   deleteSetAndRenumber,
@@ -177,6 +178,17 @@ describe('routines and ordering', () => {
     await expect(renameRoutine(push, 'PUSH')).resolves.toBeUndefined()
     expect((await db.routines.get(push)).name).toBe('PUSH')
     expect((await db.routines.get(old)).name).toBe('Legs')
+  })
+
+  test('addRoutine trims, rejects empty and duplicate active names, allows archived name', async () => {
+    const id = await addRoutine('  Push ')
+    expect((await db.routines.get(id)).name).toBe('Push')
+    await expect(addRoutine('push')).rejects.toThrow('Bu isimde bir gün zaten var.')
+    await expect(addRoutine('   ')).rejects.toThrow()
+    await db.routines.add({ name: 'Legs', archived: true })
+    const legs = await addRoutine('legs')
+    expect((await db.routines.get(legs)).name).toBe('legs')
+    expect(await db.routines.count()).toBe(3)
   })
 
   test('addExercise appends order and stores rep range', async () => {

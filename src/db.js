@@ -386,6 +386,19 @@ export async function renameRoutine(id, name) {
   });
 }
 
+/** Yeni gün ekler; aynı isimde aktif gün varsa reddeder (arşivli aynı isim engel olmaz). Dönüş: id. */
+export async function addRoutine(name) {
+  const trimmed = requireName(name, 'Gün adı boş olamaz.');
+  return db.transaction('rw', db.routines, async () => {
+    const routines = await db.routines.toArray();
+    const clash = routines.some(
+      (routine) => isActive(routine) && normalizeName(routine.name) === normalizeName(trimmed),
+    );
+    if (clash) throw new Error('Bu isimde bir gün zaten var.');
+    return db.routines.add({ name: trimmed });
+  });
+}
+
 /** Verilen id sırasını 0..n-1 olarak `order` alanına yazar (yalnızca o güne ait hareketler). */
 export async function reorderExercises(routineId, orderedIds) {
   await db.transaction('rw', db.exercises, async () => {
