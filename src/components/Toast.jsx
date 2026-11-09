@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 
 // Navigasyonun üstünde, max-w-md sütununun içinde duran geçici bildirim.
-export default function Toast({ message, actionLabel, onAction, onDismiss, durationMs = 5000 }) {
+export default function Toast({ message, actionLabel, onAction, onDismiss, durationMs = 5000, raised = false }) {
   const dismissRef = useRef(onDismiss)
   useEffect(() => {
     dismissRef.current = onDismiss
@@ -14,7 +14,7 @@ export default function Toast({ message, actionLabel, onAction, onDismiss, durat
   }, [message, durationMs])
 
   return (
-    <div className="pointer-events-none fixed inset-x-0 bottom-24 z-20">
+    <div className={`pointer-events-none fixed inset-x-0 z-20 ${raised ? 'bottom-48' : 'bottom-24'}`}>
       <div className="mx-auto max-w-md px-4">
         <div
           role="status"

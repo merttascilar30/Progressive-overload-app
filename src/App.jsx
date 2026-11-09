@@ -2,6 +2,9 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { ArrowUpDown, Dumbbell, History } from 'lucide-react'
 import { db, seedDatabase, isActive, addExercise, archiveExercise, archiveRoutine, renameRoutine, reorderExercises, restoreSet, updateExercise } from './db'
 import { beep, vibrate } from './utils/notify'
+import { getRestAuto, getRestSeconds } from './utils/settings'
+import useRestTimer from './hooks/useRestTimer'
+import RestTimerBar from './components/RestTimerBar'
 import HistoryView from './components/HistoryView'
 import Toast from './components/Toast'
 import ExercisePoolModal from './components/ExercisePoolModal'
@@ -33,6 +36,9 @@ export default function App() {
   const dismissToast = useCallback(() => setToast(null), [])
   // Geri alma sonrası görünür listelerin yeniden okunması için artar.
   const [refreshToken, setRefreshToken] = useState(0)
+
+  const rest = useRestTimer()
+  const restVisible = rest.endAt != null
 
   const selectedRoutine = routines.find((r) => isActive(r) && r.id === routineId)
   const selectedExercise = routineExercises(exercises, routineId).find((ex) => ex.id === exerciseId)
@@ -85,6 +91,9 @@ export default function App() {
   }
 
   function handleSetSaved({ isPR, estimated1RM }) {
+    if (getRestAuto() && selectedExercise) {
+      rest.start(selectedExercise.restSeconds ?? getRestSeconds(), selectedExercise.name)
+    }
     if (!isPR) return
     showToast({ message: `🏆 Yeni rekor! Tahmini 1RM ${estimated1RM} kg` })
     vibrate([100, 50, 100])
@@ -150,7 +159,7 @@ export default function App() {
 
   return (
     <div className="min-h-dvh bg-slate-950 text-slate-100">
-      <div className="mx-auto flex min-h-dvh max-w-md flex-col px-4 pb-28 pt-6">
+      <div className={`mx-auto flex min-h-dvh max-w-md flex-col px-4 ${restVisible ? 'pb-48' : 'pb-28'} pt-6`}>
         {storageError && (
           <div role="alert" className="mb-4 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">{storageError}</div>
         )}
@@ -195,7 +204,11 @@ export default function App() {
           actionLabel={toast.actionLabel}
           onAction={toast.onAction}
           onDismiss={dismissToast}
+          raised={restVisible}
         />
+      )}
+      {restVisible && (
+        <RestTimerBar remaining={rest.remaining} totalSeconds={rest.totalSeconds} onAdd={rest.addSeconds} onSkip={rest.stop} />
       )}
       <nav className="fixed inset-x-0 bottom-0 z-10 border-t border-slate-800 bg-slate-950/90 backdrop-blur">
         <div className="mx-auto flex max-w-md gap-2 px-4 py-2">
