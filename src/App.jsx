@@ -119,11 +119,11 @@ export default function App() {
           </div>
         </header>
 
-        {activeTab === 'history' ? (
-          <HistoryView exercises={exercises} />
-        ) : (
-          // Sekmeye dönüşte yeniden bağlanır; geçmişteki düzenleme/silmeler bayat kalmaz.
+        {activeTab === 'history' && <HistoryView exercises={exercises} />}
+        {/* Gizlenir ama bağlı kalır: sekme dönüşünde yazılan form değerleri korunur. */}
+        <div hidden={activeTab !== 'workout'}>
           <WorkoutView
+            active={activeTab === 'workout'}
             routines={routines}
             exercises={exercises}
             routineId={routineId}
@@ -135,7 +135,7 @@ export default function App() {
             onSetSaved={() => {}}
             onSetDeleted={() => {}}
           />
-        )}
+        </div>
       </div>
       {/* İleride: toast ve dinlenme sayacı yuvası */}
       <nav className="fixed inset-x-0 bottom-0 z-10 border-t border-slate-800 bg-slate-950/90 backdrop-blur">

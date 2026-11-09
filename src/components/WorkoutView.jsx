@@ -22,6 +22,7 @@ const bumpInt = (setter, min, max) => (direction) =>
   setter((prev) => Math.min(max, Math.max(min, Math.round(Number(prev) || 0) + direction)))
 
 export default function WorkoutView({
+  active = true,
   routines,
   exercises,
   routineId,
@@ -70,6 +71,16 @@ export default function WorkoutView({
     setRir(DEFAULT_RIR)
     setIsWarmup(false)
   }, [loadedExerciseId, selectedExercise, recommendation, repMin])
+
+  // Sekme değişimi: ayrılırken yarım düzenleme bırakılır (değerler geri gelir);
+  // dönüşte Geçmiş'teki düzenleme/silmeler için veri yenilenir, form ezilmez.
+  const wasActive = useRef(active)
+  useEffect(() => {
+    if (wasActive.current === active) return
+    wasActive.current = active
+    if (active) reload().catch((error) => onError(`Antrenman verisi yüklenemedi: ${error.message}`))
+    else cancelEdit()
+  }, [active]) // eslint-disable-line react-hooks/exhaustive-deps -- yalnızca geçişte çalışır
 
   function cancelEdit() {
     const snap = snapshotRef.current
