@@ -30,7 +30,8 @@ function groupSets(sets, exerciseInfo, routineNames) {
     exMap.get(set.exerciseId).push(set)
 
     // 0 kg (vücut ağırlığı) ve >12 tekrar için estimate1RM null döner; rozet hesabına katılmaz.
-    const estimate = estimate1RM(set.weight, set.reps)
+    // Isınma setleri 1RM karşılaştırmasına katılmaz.
+    const estimate = set.isWarmup ? null : estimate1RM(set.weight, set.reps)
     if (estimate != null) {
       if (!best1RM.has(set.exerciseId)) best1RM.set(set.exerciseId, new Map())
       const perDay = best1RM.get(set.exerciseId)
@@ -92,7 +93,7 @@ function ProgressBadge({ delta }) {
   return <span className="text-xs font-semibold text-red-400">📉 {rounded} kg</span>
 }
 
-export default function HistoryView({ exercises }) {
+export default function HistoryView({ exercises, onSetDeleted, refreshToken = 0 }) {
   const [groups, setGroups] = useState(null)
   const [editModeDate, setEditModeDate] = useState(null)
   const [editingSetId, setEditingSetId] = useState(null)
@@ -123,7 +124,7 @@ export default function HistoryView({ exercises }) {
     return () => {
       ref.current++ // Unmount sonrası state yazımını iptal et
     }
-  }, [load])
+  }, [load, refreshToken]) // refreshToken: geri alma sonrası yeniden oku
 
   function toggleEditMode(key) {
     setEditingSetId(null)
@@ -138,6 +139,7 @@ export default function HistoryView({ exercises }) {
       weight: set.weight,
       reps: set.reps,
       rir: typeof set.rir === 'number' ? set.rir : DEFAULT_RIR,
+      isWarmup: Boolean(set.isWarmup),
     })
   }
 
@@ -149,7 +151,7 @@ export default function HistoryView({ exercises }) {
     }
 
     try {
-      await updateSet(editingSetId, value)
+      await updateSet(editingSetId, { ...value, isWarmup: Boolean(draft.isWarmup) })
       setEditingSetId(null)
       setEditError('')
       await load()
@@ -158,11 +160,12 @@ export default function HistoryView({ exercises }) {
     }
   }
 
-  async function deleteSet(id) {
+  async function deleteSet(set) {
     try {
-      await deleteSetAndRenumber(id)
-      if (editingSetId === id) setEditingSetId(null)
+      await deleteSetAndRenumber(set.id)
+      if (editingSetId === set.id) setEditingSetId(null)
       setEditError('')
+      onSetDeleted?.(set)
       await load()
     } catch (err) {
       setEditError(`Set silinemedi: ${err.message}`)
@@ -285,6 +288,7 @@ export default function HistoryView({ exercises }) {
                               <span>
                                 Set {set.setNumber}: {set.weight}kg × {set.reps}
                                 {typeof set.rir === 'number' ? ` (RIR ${set.rir})` : ''}
+                                {set.isWarmup && <span className="ml-2 text-xs font-semibold text-amber-400">Isınma</span>}
                               </span>
                               {isEditMode && (
                                 <span className="flex gap-1">
@@ -299,7 +303,7 @@ export default function HistoryView({ exercises }) {
                                   <button
                                     type="button"
                                     aria-label="Seti sil"
-                                    onClick={() => deleteSet(set.id)}
+                                    onClick={() => deleteSet(set)}
                                     className={`${iconButtonClass} text-red-400`}
                                   >
                                     <Trash2 className="h-4 w-4" />

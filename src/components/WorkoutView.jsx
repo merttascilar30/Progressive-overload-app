@@ -3,6 +3,7 @@ import { Settings } from 'lucide-react'
 import { addSet, deleteSetAndRenumber, isActive, updateSet, withExerciseDefaults } from '../db'
 import useExerciseData from '../hooks/useExerciseData'
 import { DEFAULT_RIR, LIMITS, parseSetInput } from '../utils/progressionEngine'
+import { unlockAudio } from '../utils/notify'
 import { routineExercises } from '../utils/sessionSets'
 import Stepper from './Stepper'
 import TodaySetList from './TodaySetList'
@@ -33,6 +34,7 @@ export default function WorkoutView({
   onError,
   onSetSaved,
   onSetDeleted,
+  refreshToken = 0,
 }) {
   const activeRoutines = useMemo(() => routines.filter(isActive), [routines])
   const visibleExercises = useMemo(() => routineExercises(exercises, routineId), [exercises, routineId])
@@ -82,6 +84,14 @@ export default function WorkoutView({
     else cancelEdit()
   }, [active]) // eslint-disable-line react-hooks/exhaustive-deps -- yalnızca geçişte çalışır
 
+  // App geri alma gibi dış değişikliklerde token'ı artırır; liste yeniden okunur.
+  const seenRefreshToken = useRef(refreshToken)
+  useEffect(() => {
+    if (seenRefreshToken.current === refreshToken) return
+    seenRefreshToken.current = refreshToken
+    reload().catch((error) => onError(`Antrenman verisi yüklenemedi: ${error.message}`))
+  }, [refreshToken]) // eslint-disable-line react-hooks/exhaustive-deps -- yalnızca token değişince çalışır
+
   function cancelEdit() {
     const snap = snapshotRef.current
     if (snap) {
@@ -113,6 +123,7 @@ export default function WorkoutView({
       return
     }
 
+    unlockAudio() // Tarayıcı sesi yalnızca kullanıcı dokunuşu içinde açar
     savingRef.current = true
     setSaving(true)
     onError('')
@@ -124,6 +135,7 @@ export default function WorkoutView({
         setEditingSetId(null)
       } else {
         const { isPR } = await addSet(selectedExercise.id, payload)
+        setIsWarmup(false)
         onSetSaved({ isPR, estimated1RM: value.estimated1RM })
       }
       await reload()
@@ -232,6 +244,7 @@ export default function WorkoutView({
               <li key={set.id} className="text-sm font-medium leading-relaxed text-slate-200">
                 Set {set.setNumber}: {set.weight}kg × {set.reps}
                 {typeof set.rir === 'number' ? ` (RIR ${set.rir})` : ''}
+                {set.isWarmup && <span className="ml-2 text-xs font-semibold text-amber-400">Isınma</span>}
               </li>
             ))}
           </ul>
@@ -280,6 +293,20 @@ export default function WorkoutView({
         step={1}
       />
 
+      <button
+        type="button"
+        aria-pressed={isWarmup}
+        onClick={() => setIsWarmup((prev) => !prev)}
+        className="mb-3 flex h-12 w-full items-center justify-between rounded-2xl border border-slate-800 bg-slate-900 px-4 text-base font-semibold text-slate-200 active:bg-slate-800"
+      >
+        Isınma seti
+        <span
+          aria-hidden="true"
+          className={`flex h-7 w-12 items-center rounded-full p-1 transition-colors ${isWarmup ? 'bg-emerald-500' : 'bg-slate-700'}`}
+        >
+          <span className={`h-5 w-5 rounded-full bg-white transition-transform ${isWarmup ? 'translate-x-5' : ''}`} />
+        </span>
+      </button>
       <button
         type="button"
         onClick={handleSaveSet}

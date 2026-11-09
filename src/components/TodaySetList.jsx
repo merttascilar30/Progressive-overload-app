@@ -24,7 +24,8 @@ export default function TodaySetList({ sets, editingSetId, onEdit, onDelete }) {
           <span className="font-bold text-white">
             {set.weight} kg × {set.reps}
           </span>
-          {Number.isInteger(set.rir) && <span className="text-sm text-emerald-400">RIR {set.rir}</span>}
+          {set.isWarmup && <span className="text-xs font-semibold text-amber-400">Isınma</span>}
+          {Number.isInteger(set.rir) &&<span className="text-sm text-emerald-400">RIR {set.rir}</span>}
           <span className="flex gap-1">
             <button
               type="button"

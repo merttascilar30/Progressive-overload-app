@@ -1,7 +1,9 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Dumbbell, History } from 'lucide-react'
-import { db, seedDatabase, isActive, addExercise, archiveExercise, archiveRoutine } from './db'
+import { db, seedDatabase, isActive, addExercise, archiveExercise, archiveRoutine, restoreSet } from './db'
+import { beep, vibrate } from './utils/notify'
 import HistoryView from './components/HistoryView'
+import Toast from './components/Toast'
 import ExercisePoolModal from './components/ExercisePoolModal'
 import ManageModal from './components/ManageModal'
 import WorkoutView from './components/WorkoutView'
@@ -23,6 +25,12 @@ export default function App() {
   const [storageError, setStorageError] = useState('')
   // null | 'routine-add' | 'routine-manage' | 'exercise-add' | 'exercise-manage'
   const [modal, setModal] = useState(null)
+  // Tek toast: { id, message, actionLabel?, onAction? }; yenisi eskisini değiştirir.
+  const [toast, setToast] = useState(null)
+  const toastIdRef = useRef(0)
+  const dismissToast = useCallback(() => setToast(null), [])
+  // Geri alma sonrası görünür listelerin yeniden okunması için artar.
+  const [refreshToken, setRefreshToken] = useState(0)
 
   const selectedRoutine = routines.find((r) => isActive(r) && r.id === routineId)
   const selectedExercise = routineExercises(exercises, routineId).find((ex) => ex.id === exerciseId)
@@ -67,6 +75,32 @@ export default function App() {
     const requires = { 'exercise-add': routineId, 'routine-manage': routineId, 'exercise-manage': selectedExercise }
     if (name in requires && !requires[name]) return
     setModal(name)
+  }
+
+  function showToast(next) {
+    toastIdRef.current += 1
+    setToast({ id: toastIdRef.current, ...next })
+  }
+
+  function handleSetSaved({ isPR, estimated1RM }) {
+    if (!isPR) return
+    showToast({ message: `🏆 Yeni rekor! Tahmini 1RM ${estimated1RM} kg` })
+    vibrate([100, 50, 100])
+    beep([0, 0.15], 1320)
+  }
+
+  async function undoDelete(set) {
+    setToast(null)
+    try {
+      await restoreSet(set)
+      setRefreshToken((token) => token + 1)
+    } catch (error) {
+      setStorageError(`Geri alınamadı: ${error.message}`)
+    }
+  }
+
+  function handleSetDeleted(set) {
+    showToast({ message: 'Set silindi', actionLabel: 'Geri al', onAction: () => undoDelete(set) })
   }
 
   // CRUD: hatalar fırlatılır; modal yakalayıp gösterir ve açık kalır.
@@ -119,7 +153,9 @@ export default function App() {
           </div>
         </header>
 
-        {activeTab === 'history' && <HistoryView exercises={exercises} />}
+        {activeTab === 'history' && (
+          <HistoryView exercises={exercises} refreshToken={refreshToken} onSetDeleted={handleSetDeleted} />
+        )}
         {/* Gizlenir ama bağlı kalır: sekme dönüşünde yazılan form değerleri korunur. */}
         <div hidden={activeTab !== 'workout'}>
           <WorkoutView
@@ -132,12 +168,21 @@ export default function App() {
             onSelectExercise={selectExercise}
             onOpenModal={openModal}
             onError={setStorageError}
-            onSetSaved={() => {}}
-            onSetDeleted={() => {}}
+            onSetSaved={handleSetSaved}
+            onSetDeleted={handleSetDeleted}
+            refreshToken={refreshToken}
           />
         </div>
       </div>
-      {/* İleride: toast ve dinlenme sayacı yuvası */}
+      {toast && (
+        <Toast
+          key={toast.id}
+          message={toast.message}
+          actionLabel={toast.actionLabel}
+          onAction={toast.onAction}
+          onDismiss={dismissToast}
+        />
+      )}
       <nav className="fixed inset-x-0 bottom-0 z-10 border-t border-slate-800 bg-slate-950/90 backdrop-blur">
         <div className="mx-auto flex max-w-md gap-2 px-4 py-2">
           {TABS.map(({ key, label, Icon }) => (
