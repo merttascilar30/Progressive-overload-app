@@ -1,80 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Check, Pencil, Trash2, X } from 'lucide-react'
-import { db, deleteSetAndRenumber, updateSet } from '../db'
-import { DEFAULT_RIR, calculateVolumeLoad, estimate1RM, parseSetInput } from '../utils/progressionEngine'
+import { db, deleteSetAndRenumber, getSetsBetween, lastBestBefore, oldestSetTimestamp, updateSet } from '../db'
+import { startOfDay } from '../utils/sessionSets'
+import { DEFAULT_RIR, parseSetInput } from '../utils/progressionEngine'
+import { groupSets } from '../utils/historyGroups'
 
-const dateFormatter = new Intl.DateTimeFormat('tr-TR', {
-  day: 'numeric',
-  month: 'long',
-  year: 'numeric',
-})
-
-function dayKey(timestamp) {
-  const d = new Date(timestamp)
-  d.setHours(0, 0, 0, 0)
-  return d.getTime()
-}
-
-// Setleri gün -> egzersiz -> setler şeklinde gruplar (en yeni gün önce).
-// Her egzersiz için günün en yüksek 1RM'i ve bir önceki güne göre farkı hesaplanır.
-function groupSets(sets, exerciseInfo, routineNames) {
-  const days = new Map()
-  // exerciseId -> Map(dayKey -> en yüksek 1RM)
-  const best1RM = new Map()
-
-  for (const set of sets) {
-    const key = dayKey(set.timestamp)
-    if (!days.has(key)) days.set(key, new Map())
-    const exMap = days.get(key)
-    if (!exMap.has(set.exerciseId)) exMap.set(set.exerciseId, [])
-    exMap.get(set.exerciseId).push(set)
-
-    // 0 kg (vücut ağırlığı) ve >12 tekrar için estimate1RM null döner; rozet hesabına katılmaz.
-    // Isınma setleri 1RM karşılaştırmasına katılmaz.
-    const estimate = set.isWarmup ? null : estimate1RM(set.weight, set.reps)
-    if (estimate != null) {
-      if (!best1RM.has(set.exerciseId)) best1RM.set(set.exerciseId, new Map())
-      const perDay = best1RM.get(set.exerciseId)
-      perDay.set(key, Math.max(perDay.get(key) ?? 0, estimate))
-    }
-  }
-
-  // Farkları tek seferde hesapla: gün sırasına göre bir önceki günle kıyasla.
-  const deltas = new Map()
-  for (const [exerciseId, perDay] of best1RM) {
-    const keys = [...perDay.keys()].sort((a, b) => a - b)
-    for (let i = 1; i < keys.length; i++) {
-      deltas.set(`${exerciseId}|${keys[i]}`, perDay.get(keys[i]) - perDay.get(keys[i - 1]))
-    }
-  }
-
-  return [...days.entries()]
-    .sort((a, b) => b[0] - a[0])
-    .map(([key, exMap]) => {
-      const routineSet = new Set()
-      const exercises = [...exMap.entries()].map(([exerciseId, list]) => {
-        const info = exerciseInfo.get(exerciseId)
-        const routineName = routineNames.get(info?.routineId)
-        if (routineName) routineSet.add(routineName)
-        return {
-          exerciseId,
-          name: info?.name ?? 'Bilinmeyen hareket',
-          delta: deltas.get(`${exerciseId}|${key}`) ?? null,
-          volume: calculateVolumeLoad(list),
-          sets: list.sort(
-            (a, b) => (a.setNumber ?? 0) - (b.setNumber ?? 0) || a.timestamp - b.timestamp,
-          ),
-        }
-      })
-
-      return {
-        key,
-        title: dateFormatter.format(new Date(key)),
-        routines: [...routineSet].join(' / '),
-        exercises,
-      }
-    })
-}
+const PAGE_DAYS = 30
+const DAY_MS = 24 * 60 * 60 * 1000
 
 function ProgressBadge({ delta }) {
   if (delta == null) return null
@@ -102,20 +34,29 @@ export default function HistoryView({ exercises, onSetDeleted, refreshToken = 0 
   const [editError, setEditError] = useState('')
 
   const requestRef = useRef(0)
+  // Yüklenen pencerenin başlangıcı: son 30 gün; "Daha fazla göster" 30 gün geriye genişletir.
+  const [windowStart, setWindowStart] = useState(() => startOfDay() - (PAGE_DAYS - 1) * DAY_MS)
+  const [hasMore, setHasMore] = useState(false)
 
   const load = useCallback(async () => {
     const requestId = ++requestRef.current
     try {
-      const [sets, routines] = await Promise.all([db.sets.toArray(), db.routines.toArray()])
+      const [sets, routines, oldest] = await Promise.all([
+        getSetsBetween(windowStart, Number.MAX_SAFE_INTEGER),
+        db.routines.toArray(),
+        oldestSetTimestamp(),
+      ])
+      const priorBest = await lastBestBefore([...new Set(sets.map((set) => set.exerciseId))], windowStart)
       if (requestId !== requestRef.current) return // Eski yanıt yenisinin üstüne yazmasın
       const exerciseInfo = new Map(exercises.map((ex) => [ex.id, ex]))
       const routineNames = new Map(routines.map((r) => [r.id, r.name]))
-      setGroups(groupSets(sets, exerciseInfo, routineNames))
+      setGroups(groupSets(sets, exerciseInfo, routineNames, priorBest))
+      setHasMore(oldest != null && oldest < windowStart)
       setLoadError('')
     } catch (error) {
       if (requestId === requestRef.current) setLoadError(`Geçmiş yüklenemedi: ${error.message}`)
     }
-  }, [exercises])
+  }, [exercises, windowStart])
 
   useEffect(() => {
     const ref = requestRef
@@ -176,11 +117,24 @@ export default function HistoryView({ exercises, onSetDeleted, refreshToken = 0 
     return <p role={loadError ? 'alert' : undefined} className="text-center text-sm text-slate-500">{loadError || 'Yükleniyor…'}</p>
   }
 
+  const moreButton = hasMore && (
+    <button
+      type="button"
+      onClick={() => setWindowStart((start) => start - PAGE_DAYS * DAY_MS)}
+      className="h-12 w-full rounded-2xl bg-slate-800 text-sm font-semibold text-slate-200 active:bg-slate-700"
+    >
+      Daha fazla göster
+    </button>
+  )
+
   if (groups.length === 0) {
     return (
-      <p className="rounded-2xl border border-dashed border-slate-800 px-4 py-8 text-center text-sm text-slate-500">
-        Henüz kayıtlı antrenman yok.
-      </p>
+      <div className="space-y-4">
+        <p className="rounded-2xl border border-dashed border-slate-800 px-4 py-8 text-center text-sm text-slate-500">
+          {hasMore ? 'Son günlerde kayıt yok.' : 'Henüz kayıtlı antrenman yok.'}
+        </p>
+        {moreButton}
+      </div>
     )
   }
 
@@ -332,6 +286,7 @@ export default function HistoryView({ exercises, onSetDeleted, refreshToken = 0 
           </section>
         )
       })}
+      {moreButton}
     </div>
   )
 }
