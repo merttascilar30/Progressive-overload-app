@@ -1,4 +1,4 @@
-- Stack: React 18, Vite, Tailwind CSS, Dexie.js (IndexedDB).
+- Stack: React 19, Vite, Tailwind CSS, Dexie.js (IndexedDB).
 - UI/UX: Mobile-first, Dark theme (slate-950 background, emerald-500 accents), large touch targets for gym usage. No complex routing needed for MVP, use conditional rendering if necessary.
 - Database: Offline-first. Dexie stores workouts, exercises (must include equipmentType), and sets (must include weight, reps, RIR).
 - Core Logic: Alpha Progression style progression. Use Brzycki 1RM formula to compare past sets. Recommend dynamic next-set targets based on previous session's RIR and volume.

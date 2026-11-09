@@ -117,9 +117,11 @@ export default function HistoryView({ exercises }) {
   }, [exercises])
 
   useEffect(() => {
+    const ref = requestRef
+    // oxlint-disable-next-line react/set-state-in-effect -- IndexedDB senkronizasyonu
     load()
     return () => {
-      requestRef.current++ // Unmount sonrası state yazımını iptal et
+      ref.current++ // Unmount sonrası state yazımını iptal et
     }
   }, [load])
 
