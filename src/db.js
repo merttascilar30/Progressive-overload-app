@@ -1,4 +1,5 @@
 import Dexie from 'dexie';
+import { estimate1RM } from './utils/progressionEngine';
 
 export const db = new Dexie('overloadDB');
 
@@ -33,6 +34,50 @@ db.version(3)
       (await tx.table('routines').count()) > 0 || (await tx.table('exercises').count()) > 0;
     if (hasData) await tx.table('meta').put({ key: 'seeded', value: true });
   });
+
+// v4: Şema aynı; hareketlere gün içi sıralama (`order`) eklendi. Mevcut kayıtlarda
+// sıra id'ye eşitlenir, böylece eski görünüm değişmez.
+db.version(4)
+  .stores({
+    routines: '++id, name',
+    exercises: '++id, name, targetMuscle, equipmentType, routineId',
+    workouts: '++id, date, name, isCompleted',
+    sets: '++id, workoutId, exerciseId, timestamp',
+    meta: 'key',
+  })
+  .upgrade((tx) =>
+    tx.table('exercises').toCollection().modify((ex) => {
+      ex.order ??= ex.id;
+    }),
+  );
+
+export const REP_LIMITS = { min: 1, max: 50 };
+export const NOTE_MAX_LENGTH = 200;
+export const BAR_WEIGHTS = [20, 15, 10];
+
+const EXERCISE_DEFAULTS = {
+  repMin: 6,
+  repMax: 8,
+  restSeconds: null,
+  note: '',
+  barWeight: 20,
+};
+
+/**
+ * Eski sürümlerden / yedeklerden gelen eksik alanları varsayılanlarla doldurur.
+ * Kaydı değiştirmez, yeni nesne döner.
+ */
+export function withExerciseDefaults(ex) {
+  const filled = { ...ex };
+  for (const [key, value] of Object.entries(EXERCISE_DEFAULTS)) filled[key] = ex?.[key] ?? value;
+  filled.order = ex?.order ?? ex?.id;
+  return filled;
+}
+
+/** Hareketleri gün içi sıraya göre dizer; `order` yoksa id'ye düşer. */
+export function sortByOrder(a, b) {
+  return (a.order ?? a.id) - (b.order ?? b.id);
+}
 
 // Silinen gün/hareketler kalıcı olarak silinmez, `archived: true` ile gizlenir.
 // Böylece geçmişteki setler hareket ve gün adlarını korur.
@@ -125,7 +170,11 @@ async function mergeDuplicateExercises() {
   }
 }
 
-/** Set ekler. date ve timestamp aynı `now`'dan türetilir, gece yarısında tutarlı kalır. */
+/**
+ * Set ekler. date ve timestamp aynı `now`'dan türetilir, gece yarısında tutarlı kalır.
+ * Dönüş: `{ id, isPR }`. Rekor: tahmini 1RM, hareketin önceki ısınma dışı en iyisini aşarsa.
+ * İlk set, ısınma seti ve 1RM'i hesaplanamayan set (0 kg, 12+ tekrar) rekor sayılmaz.
+ */
 export async function addSet(exerciseId, value, now = new Date()) {
   const date = toDateString(now);
   return db.transaction('rw', db.workouts, db.sets, async () => {
@@ -133,14 +182,32 @@ export async function addSet(exerciseId, value, now = new Date()) {
     const workoutId =
       workout?.id ?? (await db.workouts.add({ date, name: 'Antrenman', isCompleted: false }));
 
-    // Sadece bugünün setlerini oku (egzersizin tüm geçmişini değil)
-    const siblings = await db.sets
-      .where('workoutId').equals(workoutId)
-      .and((set) => set.exerciseId === exerciseId)
-      .toArray();
+    const history = await db.sets.where('exerciseId').equals(exerciseId).toArray();
+    const siblings = history.filter((set) => set.workoutId === workoutId);
     const setNumber = siblings.reduce((max, set) => Math.max(max, set.setNumber ?? 0), 0) + 1;
 
-    return db.sets.add({ ...value, workoutId, exerciseId, setNumber, timestamp: now.getTime() });
+    const isWarmup = Boolean(value?.isWarmup);
+    const current = isWarmup ? null : estimate1RM(value?.weight, value?.reps);
+    let isPR = false;
+    if (current != null) {
+      let best = null;
+      for (const set of history) {
+        if (set.isWarmup) continue;
+        const e1rm = estimate1RM(set.weight, set.reps);
+        if (e1rm != null && (best == null || e1rm > best)) best = e1rm;
+      }
+      isPR = best != null && current > best;
+    }
+
+    const id = await db.sets.add({
+      ...value,
+      isWarmup,
+      workoutId,
+      exerciseId,
+      setNumber,
+      timestamp: now.getTime(),
+    });
+    return { id, isPR };
   });
 }
 
@@ -173,7 +240,46 @@ export async function deleteSetAndRenumber(setId) {
 }
 
 /**
+ * Silinen bir seti (geri al) aynı id ile geri koyar ve kardeşlerini 1..n numaralar.
+ * Arada yeni set eklenmiş olsa bile geri gelen set eski sırasına döner.
+ */
+export async function restoreSet(set) {
+  await db.transaction('rw', db.sets, async () => {
+    await db.sets.put(set);
+    const siblings = await db.sets
+      .where('workoutId').equals(set.workoutId)
+      .and((other) => other.exerciseId === set.exerciseId)
+      .toArray();
+    // Eşit numarada geri yüklenen set önce gelir (eski yerini geri alır).
+    const restoredFirst = (a, b) => (a.id === set.id ? -1 : b.id === set.id ? 1 : 0);
+    siblings.sort(
+      (a, b) =>
+        (a.setNumber ?? 0) - (b.setNumber ?? 0) || restoredFirst(a, b) || a.timestamp - b.timestamp,
+    );
+    for (const [index, sibling] of siblings.entries()) {
+      if (sibling.setNumber !== index + 1) await db.sets.update(sibling.id, { setNumber: index + 1 });
+    }
+  });
+}
+
+function validateRepRange(repMin, repMax) {
+  for (const value of [repMin, repMax]) {
+    if (!Number.isInteger(value) || value < REP_LIMITS.min || value > REP_LIMITS.max) {
+      throw new Error(`Tekrar aralığı ${REP_LIMITS.min}–${REP_LIMITS.max} arasında tam sayı olmalı.`);
+    }
+  }
+  if (repMin > repMax) throw new Error('En az tekrar, en fazla tekrardan büyük olamaz.');
+}
+
+function requireName(name, message) {
+  const trimmed = String(name ?? '').trim();
+  if (!trimmed) throw new Error(message);
+  return trimmed;
+}
+
+/**
  * Aynı günde aynı isim varsa yenisini açmaz; arşivliyse geri getirir (geçmiş korunur).
+ * Yeni hareket günün sonuna eklenir (`order` = gündeki en büyük + 1).
  * Dönüş: egzersiz id'si.
  */
 export async function addExercise({
@@ -182,10 +288,14 @@ export async function addExercise({
   targetMuscle = 'Genel',
   equipmentType = 'other',
   incrementStep = 2.5,
+  repMin,
+  repMax,
 }) {
   if (routineId == null) throw new Error('Önce bir antrenman günü seçmelisin.');
-  const trimmed = String(name ?? '').trim();
-  if (!trimmed) throw new Error('Hareket adı boş olamaz.');
+  const trimmed = requireName(name, 'Hareket adı boş olamaz.');
+  if (repMin != null || repMax != null) {
+    validateRepRange(repMin ?? EXERCISE_DEFAULTS.repMin, repMax ?? EXERCISE_DEFAULTS.repMax);
+  }
 
   return db.transaction('rw', db.exercises, async () => {
     const inRoutine = await db.exercises.where('routineId').equals(routineId).toArray();
@@ -194,7 +304,96 @@ export async function addExercise({
       if (match.archived) await db.exercises.update(match.id, { archived: false });
       return match.id;
     }
-    return db.exercises.add({ name: trimmed, targetMuscle, equipmentType, incrementStep, routineId });
+    const order = inRoutine.reduce((max, ex) => Math.max(max, ex.order ?? ex.id), -1) + 1;
+    const record = { name: trimmed, targetMuscle, equipmentType, incrementStep, routineId, order };
+    if (repMin != null) record.repMin = repMin;
+    if (repMax != null) record.repMax = repMax;
+    return db.exercises.add(record);
+  });
+}
+
+/**
+ * Hareket ayarlarını günceller: `name`, `repMin`, `repMax`, `restSeconds`, `note`, `barWeight`.
+ * Diğer alanlar yok sayılır. Geçersiz değerde Türkçe mesajla hata fırlatır.
+ */
+export async function updateExercise(id, patch = {}) {
+  await db.transaction('rw', db.exercises, async () => {
+    const current = await db.exercises.get(id);
+    if (!current) throw new Error('Hareket bulunamadı.');
+    const changes = {};
+
+    if ('name' in patch) {
+      const trimmed = requireName(patch.name, 'Hareket adı boş olamaz.');
+      const inRoutine =
+        current.routineId == null
+          ? []
+          : await db.exercises.where('routineId').equals(current.routineId).toArray();
+      const clash = inRoutine.some(
+        (ex) => ex.id !== id && isActive(ex) && normalizeName(ex.name) === normalizeName(trimmed),
+      );
+      if (clash) throw new Error('Bu günde aynı isimde hareket var.');
+      changes.name = trimmed;
+    }
+
+    if ('repMin' in patch || 'repMax' in patch) {
+      const merged = withExerciseDefaults(current);
+      const repMin = 'repMin' in patch ? patch.repMin : merged.repMin;
+      const repMax = 'repMax' in patch ? patch.repMax : merged.repMax;
+      validateRepRange(repMin, repMax);
+      if ('repMin' in patch) changes.repMin = repMin;
+      if ('repMax' in patch) changes.repMax = repMax;
+    }
+
+    if ('restSeconds' in patch) {
+      const rest = patch.restSeconds;
+      if (rest !== null && (!Number.isInteger(rest) || rest < 0)) {
+        throw new Error('Dinlenme süresi geçersiz.');
+      }
+      changes.restSeconds = rest;
+    }
+
+    if ('note' in patch) {
+      const note = String(patch.note ?? '');
+      if (note.length > NOTE_MAX_LENGTH) {
+        throw new Error(`Not en fazla ${NOTE_MAX_LENGTH} karakter olabilir.`);
+      }
+      changes.note = note;
+    }
+
+    if ('barWeight' in patch) {
+      if (!BAR_WEIGHTS.includes(patch.barWeight)) throw new Error('Bar ağırlığı geçersiz.');
+      changes.barWeight = patch.barWeight;
+    }
+
+    if (Object.keys(changes).length > 0) await db.exercises.update(id, changes);
+  });
+}
+
+/** Günü yeniden adlandırır; aktif başka bir günle (büyük/küçük harf duyarsız) çakışamaz. */
+export async function renameRoutine(id, name) {
+  const trimmed = requireName(name, 'Gün adı boş olamaz.');
+  await db.transaction('rw', db.routines, async () => {
+    if (!(await db.routines.get(id))) throw new Error('Gün bulunamadı.');
+    const routines = await db.routines.toArray();
+    const clash = routines.some(
+      (routine) =>
+        routine.id !== id && isActive(routine) && normalizeName(routine.name) === normalizeName(trimmed),
+    );
+    if (clash) throw new Error('Bu isimde bir gün zaten var.');
+    await db.routines.update(id, { name: trimmed });
+  });
+}
+
+/** Verilen id sırasını 0..n-1 olarak `order` alanına yazar (yalnızca o güne ait hareketler). */
+export async function reorderExercises(routineId, orderedIds) {
+  await db.transaction('rw', db.exercises, async () => {
+    const inRoutine = new Set(await db.exercises.where('routineId').equals(routineId).primaryKeys());
+    if (!orderedIds.every((id) => inRoutine.has(id))) {
+      throw new Error('Sıralanan hareket bu güne ait değil.');
+    }
+    for (const [index, id] of orderedIds.entries()) {
+      await db.exercises.update(id, { order: index });
+    }
   });
 }
 
