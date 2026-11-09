@@ -240,7 +240,7 @@ export default function HistoryView({ exercises, onSetDeleted, refreshToken = 0 
                         >
                           {isEditing ? (
                             <>
-                              <span className="flex items-center gap-1">
+                              <span className="flex flex-wrap items-center gap-1">
                                 <span className="text-slate-400">S{set.setNumber}</span>
                                 {[
                                   ['weight', 'Kg', 'decimal'],
@@ -260,6 +260,16 @@ export default function HistoryView({ exercises, onSetDeleted, refreshToken = 0 
                                     className={draftInputClass}
                                   />
                                 ))}
+                                <button
+                                  type="button"
+                                  aria-pressed={Boolean(draft.isWarmup)}
+                                  onClick={() => setDraft((prev) => ({ ...prev, isWarmup: !prev.isWarmup }))}
+                                  className={`h-9 rounded-lg px-2 text-xs font-semibold ${
+                                    draft.isWarmup ? 'bg-amber-500/20 text-amber-400' : 'bg-slate-800 text-slate-400 active:bg-slate-700'
+                                  }`}
+                                >
+                                  Isınma
+                                </button>
                               </span>
                               <span className="flex gap-1">
                                 <button
