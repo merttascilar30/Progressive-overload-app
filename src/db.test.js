@@ -188,6 +188,21 @@ describe('routines and ordering', () => {
     expect((await db.exercises.get(c)).order).toBe(0)
   })
 
+  test('addExercise prefers the active same-name record over an archived one', async () => {
+    const archived = await db.exercises.add({ name: 'Row', routineId: 1, archived: true, order: 0 })
+    const active = await db.exercises.add({ name: 'row', routineId: 1, order: 1 })
+
+    expect(await addExercise({ name: ' ROW ', routineId: 1 })).toBe(active)
+    expect((await db.exercises.get(archived)).archived).toBe(true)
+    expect(await db.exercises.count()).toBe(2)
+  })
+
+  test('addExercise restores an archived record when no active one exists', async () => {
+    const archived = await db.exercises.add({ name: 'Row', routineId: 1, archived: true, order: 0 })
+    expect(await addExercise({ name: 'row', routineId: 1 })).toBe(archived)
+    expect((await db.exercises.get(archived)).archived).toBe(false)
+  })
+
   test('reorderExercises writes 0..n-1', async () => {
     const a = await addExercise({ name: 'A', routineId: 1 })
     const b = await addExercise({ name: 'B', routineId: 1 })

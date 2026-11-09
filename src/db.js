@@ -299,7 +299,9 @@ export async function addExercise({
 
   return db.transaction('rw', db.exercises, async () => {
     const inRoutine = await db.exercises.where('routineId').equals(routineId).toArray();
-    const match = inRoutine.find((ex) => normalizeName(ex.name) === normalizeName(trimmed));
+    // Aktif kayıt varsa o döner; arşivli eşi ancak aktif yoksa geri getirilir (çift kayıt olmasın).
+    const sameName = inRoutine.filter((ex) => normalizeName(ex.name) === normalizeName(trimmed));
+    const match = sameName.find(isActive) ?? sameName[0];
     if (match) {
       if (match.archived) await db.exercises.update(match.id, { archived: false });
       return match.id;
