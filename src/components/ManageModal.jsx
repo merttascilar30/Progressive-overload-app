@@ -14,6 +14,7 @@ export default function ManageModal({
   startMode = 'menu',
   submitLabel = 'Kaydet',
   canDelete = false,
+  extraActions = [],
   deleteWarning,
   onSubmit,
   onDelete,
@@ -105,6 +106,12 @@ export default function ManageModal({
               <Pencil className="h-5 w-5" />
               Adını Değiştir
             </button>
+            {extraActions.map(({ label, icon: Icon, onClick }) => (
+              <button key={label} type="button" onClick={onClick} className={`${bigButton} bg-slate-800 text-white`}>
+                {Icon && <Icon className="h-5 w-5" />}
+                {label}
+              </button>
+            ))}
             {canDelete && (
               <button
                 type="button"

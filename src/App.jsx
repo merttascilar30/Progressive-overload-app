@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Dumbbell, History } from 'lucide-react'
-import { db, seedDatabase, isActive, addExercise, archiveExercise, archiveRoutine, renameRoutine, restoreSet, updateExercise } from './db'
+import { ArrowUpDown, Dumbbell, History } from 'lucide-react'
+import { db, seedDatabase, isActive, addExercise, archiveExercise, archiveRoutine, renameRoutine, reorderExercises, restoreSet, updateExercise } from './db'
 import { beep, vibrate } from './utils/notify'
 import HistoryView from './components/HistoryView'
 import Toast from './components/Toast'
@@ -8,6 +8,7 @@ import ExercisePoolModal from './components/ExercisePoolModal'
 import ManageModal from './components/ManageModal'
 import ExerciseSettingsModal from './components/ExerciseSettingsModal'
 import WorkoutView from './components/WorkoutView'
+import ReorderExercises from './components/ReorderExercises'
 import { routineExercises } from './utils/sessionSets'
 
 const TABS = [
@@ -24,7 +25,7 @@ export default function App() {
   const [exercises, setExercises] = useState([])
   const [exerciseId, setExerciseId] = useState(null)
   const [storageError, setStorageError] = useState('')
-  // null | 'routine-add' | 'routine-manage' | 'exercise-add' | 'exercise-manage'
+  // null | 'routine-add' | 'routine-manage' | 'routine-reorder' | 'exercise-add' | 'exercise-manage'
   const [modal, setModal] = useState(null)
   // Tek toast: { id, message, actionLabel?, onAction? }; yenisi eskisini değiştirir.
   const [toast, setToast] = useState(null)
@@ -73,7 +74,7 @@ export default function App() {
   }
 
   function openModal(name) {
-    const requires = { 'exercise-add': routineId, 'routine-manage': routineId, 'exercise-manage': selectedExercise }
+    const requires = { 'exercise-add': routineId, 'routine-manage': routineId, 'routine-reorder': routineId, 'exercise-manage': selectedExercise }
     if (name in requires && !requires[name]) return
     setModal(name)
   }
@@ -126,6 +127,11 @@ export default function App() {
   // Hareket ayarları ve not: hatalar çağırana fırlatılır; katalog yenilenir (öneri yeni aralığı kullanır).
   async function updateSelectedExercise(patch) {
     await updateExercise(exerciseId, patch)
+    await refreshCatalog()
+  }
+
+  async function saveExerciseOrder(orderedIds) {
+    await reorderExercises(routineId, orderedIds)
     await refreshCatalog()
   }
 
@@ -228,9 +234,18 @@ export default function App() {
           inputLabel="Gün adı"
           initialValue={selectedRoutine?.name ?? ''}
           canDelete
+          extraActions={[{ label: 'Hareketleri sırala', icon: ArrowUpDown, onClick: () => setModal('routine-reorder') }]}
           deleteWarning="Bu gün ve güne bağlı tüm hareketler silinecek. Geçmiş set kayıtları korunur."
           onSubmit={submitRenameRoutine}
           onDelete={deleteRoutine}
+          onClose={closeModal}
+        />
+      )}
+      {modal === 'routine-reorder' && (
+        <ReorderExercises
+          routineName={selectedRoutine?.name}
+          exercises={routineExercises(exercises, routineId)}
+          onSave={saveExerciseOrder}
           onClose={closeModal}
         />
       )}
