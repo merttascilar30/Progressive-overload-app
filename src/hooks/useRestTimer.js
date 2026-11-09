@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { beep, showNotification, vibrate } from '../utils/notify'
+import { restoreRestTimer, saveRestTimer } from '../utils/settings'
 
 export function remainingSeconds(endAt, now) {
   return Math.max(0, Math.ceil((endAt - now) / 1000))
@@ -12,12 +13,17 @@ export function shouldFire(state, now) {
 // Dinlenme sayacı. Bitiş zamanı (endAt) saklanır; arka planda interval durdurulsa bile
 // sekmeye dönünce gerçek süre yeniden hesaplanır.
 export default function useRestTimer() {
-  const [timer, setTimer] = useState(null) // { endAt, totalSeconds, name }
+  // { endAt, totalSeconds, name } — sayfa yenilense de süren sayaç localStorage'dan devam eder.
+  const [timer, setTimer] = useState(() => {
+    const saved = restoreRestTimer(Date.now())
+    return saved ? { endAt: saved.endAt, totalSeconds: saved.total, name: saved.name } : null
+  })
   const [now, setNow] = useState(() => Date.now())
   const firedRef = useRef(false)
   const timerRef = useRef(null)
   useEffect(() => {
     timerRef.current = timer
+    saveRestTimer(timer ? { endAt: timer.endAt, total: timer.totalSeconds, name: timer.name } : null)
   }, [timer])
 
   const tick = useCallback(() => {

@@ -5,6 +5,7 @@ const KEYS = {
   restAuto: 'overload:restAuto',
   notifAsked: 'overload:notifAsked',
   lastBackupAt: 'overload:lastBackupAt',
+  restTimer: 'overload:restTimer',
 }
 
 export const REST_OPTIONS = [60, 90, 120, 150, 180, 240]
@@ -66,4 +67,38 @@ export function needsBackupReminder({ lastBackupAt, hasSets, now }) {
   if (!hasSets) return false
   if (lastBackupAt == null) return true
   return now - lastBackupAt > BACKUP_REMINDER_MS
+}
+
+function removeKey(key) {
+  try {
+    localStorage.removeItem(key)
+  } catch {
+    // yoksay
+  }
+}
+
+/** Süren dinlenme sayacını saklar; null sayacı siler. */
+export function saveRestTimer(timer) {
+  if (!timer) {
+    removeKey(KEYS.restTimer)
+    return
+  }
+  const { endAt, total, name = '' } = timer
+  write(KEYS.restTimer, JSON.stringify({ endAt, total, name }))
+}
+
+/** Sayfa yeniden yüklenince süren sayacı geri verir; süresi geçmişse siler ve null döner. */
+export function restoreRestTimer(now) {
+  const raw = read(KEYS.restTimer)
+  if (!raw) return null
+  try {
+    const { endAt, total, name } = JSON.parse(raw)
+    if (Number.isFinite(endAt) && Number.isFinite(total) && endAt > now) {
+      return { endAt, total, name: typeof name === 'string' ? name : '' }
+    }
+  } catch {
+    // bozuk kayıt
+  }
+  removeKey(KEYS.restTimer)
+  return null
 }

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
 import { ArrowUpDown, Dumbbell, History } from 'lucide-react'
 import { db, seedDatabase, isActive, addExercise, addRoutine, archiveExercise, archiveRoutine, renameRoutine, reorderExercises, restoreSet, updateExercise } from './db'
 import { beep, vibrate } from './utils/notify'
@@ -15,6 +15,7 @@ import ReorderExercises from './components/ReorderExercises'
 import AppHeader from './components/AppHeader'
 import SettingsSheet from './components/SettingsSheet'
 import { routineExercises } from './utils/sessionSets'
+import { initialToastState, toastReducer } from './utils/toastQueue'
 
 const TABS = [
   { key: 'workout', label: 'Antrenman', Icon: Dumbbell },
@@ -32,10 +33,11 @@ export default function App() {
   const [storageError, setStorageError] = useState('')
   // null | 'routine-add' | 'routine-manage' | 'routine-reorder' | 'exercise-add' | 'exercise-manage'
   const [modal, setModal] = useState(null)
-  // Tek toast: { id, message, actionLabel?, onAction? }; yenisi eskisini değiştirir.
-  const [toast, setToast] = useState(null)
+  // Bildirim kuyruğu: { id, message, actionLabel?, onAction? }. "Geri al" gibi işlem toast'ları kesilmez.
+  const [toastState, dispatchToast] = useReducer(toastReducer, initialToastState)
+  const toast = toastState.current
   const toastIdRef = useRef(0)
-  const dismissToast = useCallback(() => setToast(null), [])
+  const dismissToast = useCallback(() => dispatchToast({ type: 'dismiss' }), [])
   // Geri alma sonrası görünür listelerin yeniden okunması için artar.
   const [refreshToken, setRefreshToken] = useState(0)
   // Yedekten dönünce artar; WorkoutView/HistoryView yeniden kurulur (eski id'lere bağlı açık düzenlemeler düşer).
@@ -74,7 +76,7 @@ export default function App() {
   // Yedekten dönünce katalog, seçim ve görünür listeler yeniden yüklenir.
   async function handleRestored() {
     // Eski verideki seti geri getirebilecek "Geri al" ve eski sete ait sayaç kapanır.
-    setToast(null)
+    dispatchToast({ type: 'clear' })
     rest.stop()
     const { routineList, list } = await refreshCatalog()
     const firstRoutineId = routineList.find(isActive)?.id ?? null
@@ -122,7 +124,7 @@ export default function App() {
 
   function showToast(next) {
     toastIdRef.current += 1
-    setToast({ id: toastIdRef.current, ...next })
+    dispatchToast({ type: 'push', toast: { id: toastIdRef.current, ...next } })
   }
 
   function handleSetSaved({ isPR, estimated1RM }) {
@@ -130,15 +132,14 @@ export default function App() {
       rest.start(selectedExercise.restSeconds ?? getRestSeconds(), selectedExercise.name)
     }
     if (!isPR) return
-    // Bekleyen "Geri al" toast'ı varsa ezilmez (silinen seti geri alma fırsatı kaybolmasın);
-    // o durumda yalnızca ses/titreşim ile rekor bildirilir.
-    if (!toast?.onAction) showToast({ message: `🏆 Yeni rekor! Tahmini 1RM ${estimated1RM} kg` })
+    // Ekranda "Geri al" varsa rekor toast'ı kuyrukta bekler, sonra gösterilir.
+    showToast({ message: `🏆 Yeni rekor! Tahmini 1RM ${estimated1RM} kg` })
     vibrate([100, 50, 100])
     beep([0, 0.15], 1320)
   }
 
   async function undoDelete(set) {
-    setToast(null)
+    dispatchToast({ type: 'dismiss' })
     try {
       await restoreSet(set)
       setRefreshToken((token) => token + 1)
