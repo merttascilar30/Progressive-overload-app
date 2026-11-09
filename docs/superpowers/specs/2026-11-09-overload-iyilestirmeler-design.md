@@ -23,7 +23,10 @@ Bu spec'in hedefi:
   deload uyarısı, günün özeti, geçmiş sayfalama) **Spec 2**'de; CSV ve bulut senkronu kapsam dışı.
 
 ### Varsayımlar (itiraz edilebilir)
-- Plaka hesaplayıcıda bar ağırlığı sabit 20 kg; plakalar 25/20/15/10/5/2.5/1.25.
+- Plaka hesaplayıcıda bar ağırlığı hareket bazında seçilir: 20 / 15 / 10 kg (varsayılan 20)
+  — kullanıcı salonda üçünü de kullanıyor. Plakalar 25/20/15/10/5/2.5/1.25.
+- Hareket sıralama sürükle-bırak ile (dokunmatik destekli); yukarı/aşağı butonları erişilebilirlik
+  yedeği olarak kalır.
 - Rekor kutlaması, hareketin daha önce en az bir kaydı varsa tetiklenir (ilk set rekor sayılmaz).
 - Isınma setleri numaralanır ama "Isınma" etiketiyle gösterilir.
 
@@ -54,6 +57,7 @@ Bu spec'in hedefi:
 | `restSeconds` | int \| null | null → genel ayar |
 | `note` | string | '' |
 | `order` | number | `id` |
+| `barWeight` | 10 \| 15 \| 20 | 20 (yalnızca barbell) |
 
 `sets` tablosuna: `isWarmup` (bool, yoksa `false`).
 
@@ -64,7 +68,8 @@ Yeni/değişen `db.js` yardımcıları (hepsi transaction içinde):
 - `renameRoutine(id, name)` — aktif günlerde aynı isim varsa hata.
 - `updateExercise(id, patch)` — `name` değişiyorsa aynı gündeki aktif hareketlerde çakışma
   kontrolü ("Bu günde aynı isimde hareket var."); `repMin ≤ repMax`, 1–50 doğrulaması.
-- `moveExercise(id, direction)` — aynı gündeki komşuyla `order` değiştirir.
+- `reorderExercises(routineId, orderedIds)` — verilen sırayla `order = 0..n-1` yazar
+  (sürükle-bırak ve yukarı/aşağı butonları aynı fonksiyonu kullanır).
 - `restoreSet(set)` — silinen seti aynı `id` ile `put` eder ve kardeşleri yeniden numaralar
   (geri al için).
 - `addSet` dönüşüne `{ id, isPR }` eklenir: ısınma değilse ve tahmini 1RM, hareketin önceki
@@ -121,14 +126,17 @@ Yeni/değişen `db.js` yardımcıları (hepsi transaction içinde):
 3. **Isınma seti:** Kaydet butonunun üstünde "Isınma seti" anahtarı (her kayıttan sonra kapanır).
    Bugünkü setler ve geçmişte "Isınma" etiketi; düzenlemede değiştirilebilir.
 4. **Harekete özel dinlenme:** Hareket ayarlarında "Varsayılan (X sn)" veya `REST_OPTIONS`'tan biri.
-5. **Hareket sıralama:** "Günü Yönet" menüsüne "Hareketleri sırala" modu: liste + her satırda
-   yukarı/aşağı butonları (`moveExercise`). Seçiciler `order ?? id`'ye göre sıralar.
+5. **Hareket sıralama:** "Günü Yönet" menüsüne "Hareketleri sırala" modu. Liste satırlarında
+   sürükleme tutamacı (≡) ile sürükle-bırak — `@dnd-kit/core` + `@dnd-kit/sortable`
+   (dokunmatik sensör, 150 ms basılı tutma gecikmesi ki kaydırma ile karışmasın). Her satırda
+   ayrıca yukarı/aşağı butonları. Bırakınca `reorderExercises`. Seçiciler `order ?? id`'ye göre sıralar.
 6. **Plaka hesaplayıcı:** Barbell harekette ağırlık alanının altında
-   "Her tarafa: 20 + 5 + 1.25" satırı. Saf fonksiyon `platesPerSide(total, bar = 20)`;
-   tam karşılanamazsa "(+0.5 kg eşleşmedi)" notu; bar altındaysa gösterilmez.
+   "Her tarafa: 20 + 5 + 1.25 (bar 20)" satırı. Saf fonksiyon `platesPerSide(total, bar)`,
+   `bar = exercise.barWeight ?? 20`; tam karşılanamazsa "(+0.5 kg eşleşmedi)" notu; bar altındaysa
+   gösterilmez.
 
 **`ExerciseSettingsModal`** hareket için `ManageModal`'ın yerini alır: ad, tekrar aralığı
-(min/max stepper), dinlenme süresi, sil (onaylı). Not satır içinde düzenlenir.
+(min/max stepper), dinlenme süresi, bar ağırlığı (yalnızca barbell; 20/15/10), sil (onaylı). Not satır içinde düzenlenir.
 
 ## 7. Dosya düzeni
 
@@ -160,7 +168,7 @@ src/
 
 - **Birim (Vitest):** `getSetRecommendation` (artır/düşür/tekrar artır, ısınma filtresi, vücut
   ağırlığı, özel aralık), `parseSetInput`, `calculateVolumeLoad`, `platesPerSide`.
-- **DB (fake-indexeddb):** v4 upgrade (`order`), `updateExercise` isim çakışması, `moveExercise`,
+- **DB (fake-indexeddb):** v4 upgrade (`order`), `updateExercise` isim çakışması, `reorderExercises`,
   `restoreSet` + yeniden numaralama, `addSet` `isPR`.
 - **Elle:** Tarayıcı panelinde mobil boyutta: set kaydı → sayaç, sil → geri al, rekor toast'ı,
   yedek al/geri yükle, sıralama, not; `npm run build` + `vite preview` ile PWA manifest/SW kontrolü.
