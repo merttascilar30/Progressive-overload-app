@@ -5,6 +5,8 @@ import useExerciseData from '../hooks/useExerciseData'
 import { DEFAULT_RIR, LIMITS, parseSetInput } from '../utils/progressionEngine'
 import { unlockAudio } from '../utils/notify'
 import { routineExercises } from '../utils/sessionSets'
+import { platesPerSide } from '../utils/plates'
+import ExerciseNote from './ExerciseNote'
 import Stepper from './Stepper'
 import TodaySetList from './TodaySetList'
 
@@ -34,13 +36,14 @@ export default function WorkoutView({
   onError,
   onSetSaved,
   onSetDeleted,
+  onUpdateExercise,
   refreshToken = 0,
 }) {
   const activeRoutines = useMemo(() => routines.filter(isActive), [routines])
   const visibleExercises = useMemo(() => routineExercises(exercises, routineId), [exercises, routineId])
   const selectedExercise = visibleExercises.find((ex) => ex.id === exerciseId) ?? null
   const weightStep = selectedExercise?.incrementStep ?? DEFAULT_STEP
-  const repMin = withExerciseDefaults(selectedExercise).repMin
+  const { repMin, barWeight: bar } = withExerciseDefaults(selectedExercise)
 
   const { todaySets, previousSets, recommendation, reload, loadedExerciseId } = useExerciseData(
     selectedExercise,
@@ -163,6 +166,26 @@ export default function WorkoutView({
     setWeight((prev) => Math.max(0, roundKg((Number(prev) || 0) + direction * weightStep)))
   }
 
+  async function handleSaveNote(note) {
+    try {
+      await onUpdateExercise({ note })
+    } catch (error) {
+      onError(`Not kaydedilemedi: ${error.message}`)
+      throw error
+    }
+  }
+
+  let plateLine = null
+  if (selectedExercise?.equipmentType === 'barbell' && weight !== '' && Number.isFinite(Number(weight))) {
+    const result = platesPerSide(Number(weight), bar)
+    if (result) {
+      const base = result.plates.length
+        ? `Her tarafa: ${result.plates.join(' + ')} (bar ${bar})`
+        : `Her tarafa: boş bar (bar ${bar})`
+      plateLine = result.remainder > 0 ? `${base} (+${result.remainder} kg eşleşmedi)` : base
+    }
+  }
+
   return (
     <>
       <label className="mb-2 block text-sm font-medium text-slate-400" htmlFor="routine">
@@ -220,6 +243,10 @@ export default function WorkoutView({
         </button>
       </div>
 
+      {selectedExercise && (
+        <ExerciseNote key={selectedExercise.id} note={selectedExercise.note ?? ''} onSave={handleSaveNote} />
+      )}
+
       <div className="mb-5 flex gap-2">
         <button type="button" onClick={() => onOpenModal('routine-add')} className={addCls}>
           + Gün Ekle
@@ -268,6 +295,7 @@ export default function WorkoutView({
         max={LIMITS.maxWeight}
         step="any"
       />
+      {plateLine && <p className="-mt-3 mb-5 text-sm font-medium text-slate-400">{plateLine}</p>}
       <Stepper
         id="reps"
         label="Tekrar"

@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Dumbbell, History } from 'lucide-react'
-import { db, seedDatabase, isActive, addExercise, archiveExercise, archiveRoutine, restoreSet } from './db'
+import { db, seedDatabase, isActive, addExercise, archiveExercise, archiveRoutine, renameRoutine, restoreSet, updateExercise } from './db'
 import { beep, vibrate } from './utils/notify'
 import HistoryView from './components/HistoryView'
 import Toast from './components/Toast'
 import ExercisePoolModal from './components/ExercisePoolModal'
 import ManageModal from './components/ManageModal'
+import ExerciseSettingsModal from './components/ExerciseSettingsModal'
 import WorkoutView from './components/WorkoutView'
 import { routineExercises } from './utils/sessionSets'
 
@@ -117,8 +118,14 @@ export default function App() {
     selectExercise(id)
   }
 
-  async function submitRename(table, id, name) {
-    await db[table].update(id, { name })
+  async function submitRenameRoutine(name) {
+    await renameRoutine(routineId, name)
+    await refreshCatalog()
+  }
+
+  // Hareket ayarları ve not: hatalar çağırana fırlatılır; katalog yenilenir (öneri yeni aralığı kullanır).
+  async function updateSelectedExercise(patch) {
+    await updateExercise(exerciseId, patch)
     await refreshCatalog()
   }
 
@@ -170,6 +177,7 @@ export default function App() {
             onError={setStorageError}
             onSetSaved={handleSetSaved}
             onSetDeleted={handleSetDeleted}
+            onUpdateExercise={updateSelectedExercise}
             refreshToken={refreshToken}
           />
         </div>
@@ -221,20 +229,16 @@ export default function App() {
           initialValue={selectedRoutine?.name ?? ''}
           canDelete
           deleteWarning="Bu gün ve güne bağlı tüm hareketler silinecek. Geçmiş set kayıtları korunur."
-          onSubmit={(name) => submitRename('routines', routineId, name)}
+          onSubmit={submitRenameRoutine}
           onDelete={deleteRoutine}
           onClose={closeModal}
         />
       )}
       {modal === 'exercise-manage' && selectedExercise && (
-        <ManageModal
-          title="Hareketi Yönet"
-          subtitle={selectedExercise.name}
-          inputLabel="Hareket adı"
-          initialValue={selectedExercise.name}
-          canDelete
-          deleteWarning="Bu hareket silinecek. Geçmiş set kayıtları korunur."
-          onSubmit={(name) => submitRename('exercises', exerciseId, name)}
+        <ExerciseSettingsModal
+          key={selectedExercise.id}
+          exercise={selectedExercise}
+          onSave={updateSelectedExercise}
           onDelete={deleteExercise}
           onClose={closeModal}
         />
