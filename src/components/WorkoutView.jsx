@@ -134,6 +134,8 @@ export default function WorkoutView({
       const payload = { ...value, isWarmup }
       if (editingSetId != null) {
         await updateSet(editingSetId, payload)
+        // Düzenlenen setin ısınma durumu sonraki yeni sete taşınmasın; düzenleme öncesine döner.
+        setIsWarmup(snapshotRef.current?.isWarmup ?? false)
         snapshotRef.current = null
         setEditingSetId(null)
       } else {
@@ -176,8 +178,15 @@ export default function WorkoutView({
   }
 
   let plateLine = null
-  if (selectedExercise?.equipmentType === 'barbell' && weight !== '' && Number.isFinite(Number(weight))) {
-    const result = platesPerSide(Number(weight), bar)
+  // Sınır dışı ağırlıkta (ör. 99999) yüzlerce plakalık satır üretilmez; kayıt zaten reddedilir.
+  const plateWeight = Number(weight)
+  if (
+    selectedExercise?.equipmentType === 'barbell' &&
+    weight !== '' &&
+    Number.isFinite(plateWeight) &&
+    plateWeight <= LIMITS.maxWeight
+  ) {
+    const result = platesPerSide(plateWeight, bar)
     if (result) {
       const base = result.plates.length
         ? `Her tarafa: ${result.plates.join(' + ')} (bar ${bar})`
