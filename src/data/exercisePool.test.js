@@ -22,3 +22,11 @@ describe('EXERCISE_POOL tekrar aralıkları', () => {
     expect(byName('Hack Squat')).toMatchObject({ repMin: 6, repMax: 8 })
   })
 })
+
+it('MUSCLE_GROUPS lists pool muscles once, in first-seen order, with Genel last', async () => {
+  const { MUSCLE_GROUPS } = await import('./exercisePool')
+  expect(MUSCLE_GROUPS[0]).toBe('Chest')
+  expect(MUSCLE_GROUPS.at(-1)).toBe('Genel')
+  expect(new Set(MUSCLE_GROUPS).size).toBe(MUSCLE_GROUPS.length)
+  expect(MUSCLE_GROUPS).toEqual(expect.arrayContaining(['Triceps', 'Back', 'Biceps', 'Shoulders', 'Quads', 'Calves']))
+})

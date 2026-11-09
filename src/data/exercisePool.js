@@ -71,3 +71,9 @@ export const EXERCISE_POOL = [
     ],
   },
 ]
+
+// Elle eklemede seçilebilen kas grupları: havuzdaki gruplar (ilk görülme sırası) + 'Genel'.
+export const MUSCLE_GROUPS = [
+  ...new Set(EXERCISE_POOL.flatMap((group) => group.items.map((item) => item.muscle))),
+  'Genel',
+]
