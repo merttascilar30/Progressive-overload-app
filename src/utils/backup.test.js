@@ -27,6 +27,21 @@ describe('backup format 2', () => {
     expect(await db.exercises.count()).toBe(1)
   })
 
+  test('format 1 backup derives the personal pool from its exercises', async () => {
+    const data = {
+      ...baseData,
+      exercises: [
+        ...baseData.exercises,
+        { id: 2, name: 'Hip Thrust', targetMuscle: 'Glutes', equipmentType: 'barbell', routineId: 1 },
+        { id: 3, name: 'Lat Pulldown', targetMuscle: 'Back', routineId: 1 },
+      ],
+    }
+    const { payload, counts } = await readBackupFile(fileOf({ app: 'overload', formatVersion: 1, data }))
+    expect(counts.customPool).toBe(1)
+    await restoreBackup(payload)
+    expect((await db.customPool.toArray()).map((row) => row.name)).toEqual(['Hip Thrust'])
+  })
+
   test('format 2 backup round-trips customPool', async () => {
     const data = { ...baseData, customPool: [{ id: 7, name: 'Cable Crunch', nameKey: 'cable crunch', targetMuscle: 'Abs' }] }
     const { payload, counts } = await readBackupFile(fileOf({ app: 'overload', formatVersion: 2, data }))

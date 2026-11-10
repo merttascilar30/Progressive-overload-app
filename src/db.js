@@ -64,15 +64,7 @@ db.version(5)
     customPool: '++id, &nameKey',
   })
   .upgrade(async (tx) => {
-    const seen = new Set();
-    const rows = [];
-    const exercises = (await tx.table('exercises').toArray()).sort((a, b) => a.id - b.id);
-    for (const ex of exercises) {
-      const nameKey = normalizeName(ex.name);
-      if (!nameKey || seen.has(nameKey) || STATIC_POOL_KEYS.has(nameKey)) continue;
-      seen.add(nameKey);
-      rows.push(customPoolRow(ex, nameKey, Date.now()));
-    }
+    const rows = deriveCustomPool(await tx.table('exercises').toArray());
     if (rows.length) await tx.table('customPool').bulkAdd(rows);
   });
 
@@ -119,9 +111,31 @@ export function toDateString(date = new Date()) {
 
 const normalizeName = (name) => String(name ?? '').trim().toLowerCase();
 
-const STATIC_POOL_KEYS = new Set(
-  EXERCISE_POOL.flatMap((category) => category.items.map((item) => normalizeName(item.name))),
-);
+// Varsayılan Push/Pull/Legs hareketleri de "kişisel" sayılmaz (yeni kurulumda havuza girmezler).
+const DEFAULT_SPLIT_NAMES = [
+  'Bench Press', 'Incline Dumbbell Press', 'Dumbbell Lateral Raise', 'Lat Pulldown',
+  'Barbell Row', 'Barbell Squat', 'Leg Press',
+];
+const STATIC_POOL_KEYS = new Set([
+  ...EXERCISE_POOL.flatMap((category) => category.items.map((item) => normalizeName(item.name))),
+  ...DEFAULT_SPLIT_NAMES.map(normalizeName),
+]);
+
+/**
+ * Hareket listesinden kişisel havuz satırları: adı sabit havuzda ya da varsayılan günlerde
+ * olmayanlar, normalize adla tekil (ilk görülenin ayarları). v5 upgrade ve format 1 yedek kullanır.
+ */
+export function deriveCustomPool(exercises, createdAt = Date.now()) {
+  const seen = new Set();
+  const rows = [];
+  for (const ex of [...exercises].sort((a, b) => a.id - b.id)) {
+    const nameKey = normalizeName(ex.name);
+    if (!nameKey || seen.has(nameKey) || STATIC_POOL_KEYS.has(nameKey)) continue;
+    seen.add(nameKey);
+    rows.push(customPoolRow(ex, nameKey, createdAt));
+  }
+  return rows;
+}
 
 function customPoolRow(source, nameKey, createdAt) {
   return {
@@ -505,6 +519,23 @@ export async function lastBestBefore(exerciseIds, ts) {
       ...sets.filter((set) => set.timestamp >= dayStart).map((set) => estimate1RM(set.weight, set.reps)),
     );
     result.set(exerciseId, best);
+  }
+  return result;
+}
+
+/** Her hareket için ts'den önceki TÜM zamanların en iyi 1RM'i (ısınma hariç). Günün özetindeki rekor için. */
+export async function bestBefore(exerciseIds, ts) {
+  const result = new Map();
+  for (const exerciseId of exerciseIds) {
+    let best = null;
+    await db.sets
+      .where('exerciseId').equals(exerciseId)
+      .each((set) => {
+        if (set.timestamp >= ts || set.isWarmup) return;
+        const value = estimate1RM(set.weight, set.reps);
+        if (value != null && (best == null || value > best)) best = value;
+      });
+    if (best != null) result.set(exerciseId, best);
   }
   return result;
 }

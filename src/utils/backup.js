@@ -1,4 +1,4 @@
-import { db } from '../db'
+import { db, deriveCustomPool } from '../db'
 import { markBackupNow } from './settings'
 
 const TABLES = ['routines', 'exercises', 'workouts', 'sets', 'customPool']
@@ -63,6 +63,10 @@ export async function readBackupFile(file) {
   }
   if (Number(payload.formatVersion) > FORMAT_VERSION) {
     throw new Error('Bu yedek uygulamanın daha yeni bir sürümüyle alınmış.')
+  }
+  // Format 1: kişisel havuz yoktu; yedeğin hareketlerinden v5 upgrade kuralıyla türetilir.
+  if (!Array.isArray(payload.data.customPool) && Array.isArray(payload.data.exercises)) {
+    payload.data.customPool = deriveCustomPool(payload.data.exercises).map((row, i) => ({ ...row, id: i + 1 }))
   }
   for (const table of OPTIONAL_TABLES) payload.data[table] ??= []
   for (const table of TABLES) {

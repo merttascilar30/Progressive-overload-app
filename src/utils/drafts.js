@@ -48,3 +48,17 @@ export function writeDraft(exerciseId, { weight, reps, rir, isWarmup }, now = Da
 export function clearDraft(exerciseId) {
   remove(exerciseId)
 }
+
+/** Tüm taslakları siler (yedekten geri yüklemede id'ler başka hareketlere ait olabilir). */
+export function clearAllDrafts() {
+  try {
+    const keys = []
+    for (let i = 0; i < localStorage.length; i += 1) {
+      const name = localStorage.key(i)
+      if (name?.startsWith('overload:draft:')) keys.push(name)
+    }
+    for (const name of keys) localStorage.removeItem(name)
+  } catch {
+    // depolama yok
+  }
+}

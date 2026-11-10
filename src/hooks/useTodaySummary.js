@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { getSetsSince, lastBestBefore } from '../db'
+import { bestBefore, getSetsSince } from '../db'
 import { startOfDay } from '../utils/sessionSets'
 import { daySummary } from '../utils/stats'
 
@@ -17,7 +17,7 @@ export default function useTodaySummary(refreshKey, onError) {
       const sets = await getSetsSince(today)
       if (!sets.length) return null
       const ids = [...new Set(sets.map((set) => set.exerciseId))]
-      return daySummary(sets, await lastBestBefore(ids, today))
+      return daySummary(sets, await bestBefore(ids, today))
     }
     load()
       .then((next) => {

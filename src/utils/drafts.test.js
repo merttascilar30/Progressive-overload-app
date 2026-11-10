@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
-import { DRAFT_TTL_MS, clearDraft, readDraft, writeDraft } from './drafts'
+import { DRAFT_TTL_MS, clearAllDrafts, clearDraft, readDraft, writeDraft } from './drafts'
 
 function memoryStorage() {
   const map = new Map()
@@ -8,6 +8,10 @@ function memoryStorage() {
     setItem: (k, v) => map.set(k, String(v)),
     removeItem: (k) => map.delete(k),
     has: (k) => map.has(k),
+    key: (i) => [...map.keys()][i] ?? null,
+    get length() {
+      return map.size
+    },
   }
 }
 
@@ -27,6 +31,16 @@ describe('drafts', () => {
     expect(readDraft(2, 1_000)).toBeNull()
     expect(readDraft(1, 1_000 + DRAFT_TTL_MS + 1)).toBeNull()
     expect(storage.has('overload:draft:1')).toBe(false)
+  })
+
+  test('clearAllDrafts removes every draft and keeps other keys', () => {
+    writeDraft(1, values, 1_000)
+    writeDraft(2, values, 1_000)
+    storage.setItem('overload:restSeconds', '90')
+    clearAllDrafts()
+    expect(readDraft(1, 1_000)).toBeNull()
+    expect(readDraft(2, 1_000)).toBeNull()
+    expect(storage.getItem('overload:restSeconds')).toBe('90')
   })
 
   test('clearDraft removes the draft', () => {

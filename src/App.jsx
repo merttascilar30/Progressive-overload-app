@@ -17,6 +17,7 @@ import AppHeader from './components/AppHeader'
 import SettingsSheet from './components/SettingsSheet'
 import { routineExercises } from './utils/sessionSets'
 import { initialToastState, toastReducer } from './utils/toastQueue'
+import { clearAllDrafts } from './utils/drafts'
 
 const TABS = [
   { key: 'workout', label: 'Antrenman', Icon: Dumbbell },
@@ -80,6 +81,7 @@ export default function App() {
     // Eski verideki seti geri getirebilecek "Geri al" ve eski sete ait sayaç kapanır.
     dispatchToast({ type: 'clear' })
     rest.stop()
+    clearAllDrafts() // Taslaklar hareket id'sine bağlı; geri yüklenen veride id'ler başka harekete ait olabilir.
     const { routineList, list } = await refreshCatalog()
     const firstRoutineId = routineList.find(isActive)?.id ?? null
     setRoutineId(firstRoutineId)

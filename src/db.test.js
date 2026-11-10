@@ -5,6 +5,7 @@ import {
   addRoutine,
   addSet,
   db,
+  bestBefore,
   getSetsBetween,
   lastBestBefore,
   listCustomPool,
@@ -333,5 +334,20 @@ describe('paging queries', () => {
     expect(best.get(1)).toBe(80)
     expect(best.get(2)).toBe(40)
     expect(best.has(3)).toBe(false)
+  })
+})
+
+describe('bestBefore', () => {
+  const at = (d, h = 10) => new Date(2026, 10, d, h).getTime()
+  test('all-time best before ts, warmups and later sets excluded', async () => {
+    await db.sets.bulkAdd([
+      { workoutId: 1, exerciseId: 1, setNumber: 1, weight: 120, reps: 1, timestamp: at(1), isWarmup: false },
+      { workoutId: 1, exerciseId: 1, setNumber: 1, weight: 100, reps: 1, timestamp: at(5), isWarmup: false },
+      { workoutId: 1, exerciseId: 1, setNumber: 2, weight: 150, reps: 1, timestamp: at(5), isWarmup: true },
+      { workoutId: 1, exerciseId: 1, setNumber: 1, weight: 200, reps: 1, timestamp: at(9), isWarmup: false },
+    ])
+    const best = await bestBefore([1, 2], at(9, 0))
+    expect(best.get(1)).toBe(120)
+    expect(best.has(2)).toBe(false)
   })
 })

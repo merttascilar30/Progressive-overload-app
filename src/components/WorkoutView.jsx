@@ -102,10 +102,14 @@ export default function WorkoutView({
     const id = selectedExercise?.id
     if (id == null || prefilledFor.current !== id || loadedExerciseId !== id || editing != null) return undefined
     const values = { weight, reps, rir, isWarmup }
-    const base = baselineRef.current
-    const untouched =
-      base && ['weight', 'reps', 'rir', 'isWarmup'].every((field) => String(base[field]) === String(values[field]))
-    const timer = setTimeout(() => (untouched ? clearDraft(id) : writeDraft(id, values)), 400)
+    // Karşılaştırma zamanlayıcı dolduğunda yapılır: arada kayıt olduysa (taban güncellendi) taslak yazılmaz.
+    const timer = setTimeout(() => {
+      const base = baselineRef.current
+      const untouched =
+        base && ['weight', 'reps', 'rir', 'isWarmup'].every((field) => String(base[field]) === String(values[field]))
+      if (untouched) clearDraft(id)
+      else writeDraft(id, values)
+    }, 400)
     return () => clearTimeout(timer)
   }, [weight, reps, rir, isWarmup, selectedExercise, loadedExerciseId, editing])
 
@@ -167,7 +171,10 @@ export default function WorkoutView({
       if (editingSetId != null) {
         await updateSet(editingSetId, payload)
         // Düzenlenen setin ısınma durumu sonraki yeni sete taşınmasın; düzenleme öncesine döner.
-        setIsWarmup(snapshotRef.current?.isWarmup ?? false)
+        const nextWarmup = snapshotRef.current?.isWarmup ?? false
+        setIsWarmup(nextWarmup)
+        // Formda kalan değerler kaydedilmiş bir setin değerleri; taslak sayılmaz.
+        baselineRef.current = { weight, reps, rir, isWarmup: nextWarmup }
         snapshotRef.current = null
         setEditingSetId(null)
       } else {

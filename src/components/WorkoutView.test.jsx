@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { addExercise, addRoutine, db } from '../db'
-import { writeDraft } from '../utils/drafts'
+import { readDraft, writeDraft } from '../utils/drafts'
 import WorkoutView from './WorkoutView'
 
 const yesterday = (h = 10) => {
@@ -121,5 +121,30 @@ describe('WorkoutView', () => {
     const sets = await db.sets.where('exerciseId').equals(ids.benchId).sortBy('id')
     expect(sets.at(-1).isWarmup).toBe(false)
     expect(within(document.body).getAllByText('Isınma').length).toBeGreaterThan(0)
+  })
+
+  test('saving within the draft debounce leaves no draft behind', async () => {
+    const user = userEvent.setup()
+    const ids = await setup()
+    const { props } = await renderView({ routineId: ids.routineId, exerciseId: ids.benchId })
+    await waitFor(() => expect(weightInput()).toHaveProperty('value', '62.5'))
+    await user.click(screen.getByRole('button', { name: 'Ağırlık (kg) artır' }))
+    await user.click(screen.getByRole('button', { name: 'Seti Kaydet' }))
+    await waitFor(() => expect(props.onSetSaved).toHaveBeenCalled())
+    await new Promise((resolve) => setTimeout(resolve, 600))
+    expect(readDraft(ids.benchId)).toBeNull()
+  })
+
+  test('updating an edited set leaves no draft behind', async () => {
+    const user = userEvent.setup()
+    const ids = await setup()
+    await db.sets.add({ workoutId: 2, exerciseId: ids.benchId, setNumber: 1, weight: 80, reps: 3, rir: 0, timestamp: Date.now(), isWarmup: false })
+    await renderView({ routineId: ids.routineId, exerciseId: ids.benchId })
+    await waitFor(() => expect(weightInput()).toHaveProperty('value', '62.5'))
+    await user.click(screen.getByRole('button', { name: 'Seti düzenle' }))
+    await user.click(screen.getByRole('button', { name: 'Seti Güncelle' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Seti Kaydet' })).toBeTruthy())
+    await new Promise((resolve) => setTimeout(resolve, 600))
+    expect(readDraft(ids.benchId)).toBeNull()
   })
 })
