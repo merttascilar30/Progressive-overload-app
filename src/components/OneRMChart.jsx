@@ -6,8 +6,8 @@ const PAD = { left: 40, right: 12, top: 16, bottom: 26 }
 const shortDate = new Intl.DateTimeFormat('tr-TR', { day: 'numeric', month: 'short' })
 const kg = (value) => `${Math.round(value * 10) / 10}`
 
-/** Tahmini 1RM'in zaman içindeki değişimi. Kütüphanesiz SVG; genişliğe uyar. */
-export default function OneRMChart({ points }) {
+/** Bir ağırlık ölçüsünün (tahmini 1RM ya da en ağır ağırlık) zaman içindeki değişimi. Kütüphanesiz SVG. */
+export default function OneRMChart({ points, label = 'Tahmini 1RM' }) {
   const [selected, setSelected] = useState(null)
 
   if (points.length < 2) {
@@ -41,7 +41,7 @@ export default function OneRMChart({ points }) {
           {change} kg
         </span>
       </figcaption>
-      <svg viewBox={`0 0 ${W} ${H}`} className="w-full" role="img" aria-label="Tahmini 1RM grafiği">
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full" role="img" aria-label={`${label} grafiği`}>
         <line x1={PAD.left} x2={W - PAD.right} y1={y(max)} y2={y(max)} className="stroke-slate-800" />
         <line x1={PAD.left} x2={W - PAD.right} y1={y(min)} y2={y(min)} className="stroke-slate-800" />
         <text x={PAD.left - 6} y={y(max) + 4} textAnchor="end" className="fill-slate-400 text-[10px]">

@@ -164,3 +164,20 @@ describe('exerciseStall', () => {
     expect(exerciseStall([set(1, 100, 5, at(1))], at(9), 2.5)).toEqual({ stalled: false, sessions: 0, deload: null })
   })
 })
+
+describe('dailyMaxWeight', () => {
+  test('heaviest working weight per day, ascending; warmups and 0 kg skipped, high reps kept', async () => {
+    const { dailyMaxWeight } = await import('./stats')
+    const points = dailyMaxWeight([
+      set(1, 100, 5, at(10)),
+      set(1, 102.5, 15, at(10, 11)),
+      set(1, 140, 3, at(10, 9), { isWarmup: true }),
+      set(1, 0, 10, at(9)),
+      set(1, 90, 5, at(3)),
+    ])
+    expect(points).toEqual([
+      { day: new Date(2026, 10, 3).getTime(), value: 90 },
+      { day: new Date(2026, 10, 10).getTime(), value: 102.5 },
+    ])
+  })
+})

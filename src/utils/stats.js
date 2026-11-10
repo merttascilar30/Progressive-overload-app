@@ -130,3 +130,16 @@ export function exerciseStall(sets, beforeTs, incrementStep) {
   )
   return { ...status, deload: deloadWeight(workingWeight, incrementStep) }
 }
+
+/** Gün başına en ağır çalışma ağırlığı (ısınma ve 0 kg hariç), eski günden yeniye. */
+export function dailyMaxWeight(sets) {
+  const best = new Map()
+  for (const set of sets) {
+    if (!isWorking(set)) continue
+    const weight = Number(set.weight)
+    if (!Number.isFinite(weight) || weight <= 0) continue
+    const day = dayStart(set.timestamp)
+    if (weight > (best.get(day) ?? -Infinity)) best.set(day, weight)
+  }
+  return [...best.entries()].sort((a, b) => a[0] - b[0]).map(([day, value]) => ({ day, value }))
+}

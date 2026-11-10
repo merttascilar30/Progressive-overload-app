@@ -1,9 +1,14 @@
 import { useEffect, useMemo, useState } from 'react'
 import { getSetsSince, isActive, sortByOrder } from '../db'
-import { dailyBest1RM, exerciseStall, filterRange, weekStart, weeklyMuscleSets } from '../utils/stats'
+import { dailyBest1RM, dailyMaxWeight, exerciseStall, filterRange, weekStart, weeklyMuscleSets } from '../utils/stats'
 import { startOfDay } from '../utils/sessionSets'
 import OneRMChart from './OneRMChart'
 import MuscleWeekBars from './MuscleWeekBars'
+
+const METRICS = [
+  { key: 'max', label: 'En Ağır Ağırlık', compute: dailyMaxWeight },
+  { key: '1rm', label: 'Tahmini 1RM', compute: dailyBest1RM },
+]
 
 const RANGES = [
   { key: '1m', label: '1A' },
@@ -20,6 +25,8 @@ export default function StatsView({ routines, exercises, selectedExerciseId, ref
   const now = loaded?.at ?? 0
   const [error, setError] = useState('')
   const [range, setRange] = useState('3m')
+  const [metricKey, setMetricKey] = useState('1rm')
+  const metric = METRICS.find((m) => m.key === metricKey)
   const [chosenId, setChosenId] = useState(selectedExerciseId ?? null)
 
   useEffect(() => {
@@ -62,8 +69,8 @@ export default function StatsView({ routines, exercises, selectedExerciseId, ref
   }, [sets])
 
   const points = useMemo(
-    () => filterRange(dailyBest1RM(setsByExercise.get(exerciseId) ?? []), range, now),
-    [setsByExercise, exerciseId, range, now],
+    () => filterRange(metric.compute(setsByExercise.get(exerciseId) ?? []), range, now),
+    [setsByExercise, exerciseId, range, now, metric],
   )
   const muscleRows = useMemo(
     () => weeklyMuscleSets(sets ?? [], new Map(exercises.map((ex) => [ex.id, ex])), now),
@@ -126,7 +133,24 @@ export default function StatsView({ routines, exercises, selectedExerciseId, ref
         ))}
       </div>
 
-      <OneRMChart key={`${exerciseId}|${range}`} points={points} />
+      <div>
+        <OneRMChart key={`${exerciseId}|${range}|${metricKey}`} points={points} label={metric.label} />
+        <div className="mt-3 grid grid-cols-2 gap-2" role="group" aria-label="Grafik ölçüsü">
+          {METRICS.map((option) => (
+            <button
+              key={option.key}
+              type="button"
+              aria-pressed={metricKey === option.key}
+              onClick={() => setMetricKey(option.key)}
+              className={`h-11 rounded-full text-sm font-semibold ${
+                metricKey === option.key ? 'bg-emerald-500 text-slate-950' : 'bg-slate-800 text-slate-300 active:bg-slate-700'
+              }`}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+      </div>
 
       <MuscleWeekBars rows={muscleRows} weekStartTs={weekStart(now)} />
 
