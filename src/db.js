@@ -375,7 +375,7 @@ export async function addExercise({
  * Diğer alanlar yok sayılır. Geçersiz değerde Türkçe mesajla hata fırlatır.
  */
 export async function updateExercise(id, patch = {}) {
-  await db.transaction('rw', db.exercises, async () => {
+  await db.transaction('rw', db.exercises, db.customPool, async () => {
     const current = await db.exercises.get(id);
     if (!current) throw new Error('Hareket bulunamadı.');
     const changes = {};
@@ -424,6 +424,17 @@ export async function updateExercise(id, patch = {}) {
     }
 
     if (Object.keys(changes).length > 0) await db.exercises.update(id, changes);
+
+    // Kas grubu hareketin kendisine aittir: aynı isimli tüm kopyalar (her gün) ve kişisel havuz kaydı
+    // birlikte güncellenir, böylece haftalık istatistikler geriye dönük doğru gruba geçer.
+    if ('targetMuscle' in patch) {
+      const muscle = requireName(patch.targetMuscle, 'Kas grubu boş olamaz.');
+      const nameKey = normalizeName(changes.name ?? current.name);
+      await db.exercises
+        .filter((ex) => normalizeName(ex.name) === nameKey)
+        .modify({ targetMuscle: muscle });
+      await db.customPool.where('nameKey').equals(nameKey).modify({ targetMuscle: muscle });
+    }
   });
 }
 

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Check, Trash2, X } from 'lucide-react'
 import { BAR_WEIGHTS, REP_LIMITS, withExerciseDefaults } from '../db'
 import { REST_OPTIONS, getRestSeconds } from '../utils/settings'
+import { MUSCLE_GROUPS } from '../data/exercisePool'
 
 const bigButton =
   'flex h-14 w-full items-center justify-center gap-3 rounded-2xl text-lg font-bold active:scale-[0.98] transition-transform'
@@ -29,6 +30,10 @@ export default function ExerciseSettingsModal({ exercise, onSave, onDelete, onCl
   const [repMax, setRepMax] = useState(ex.repMax)
   const [restSeconds, setRestSeconds] = useState(ex.restSeconds ?? null)
   const [barWeight, setBarWeight] = useState(ex.barWeight)
+  const initialMuscle = exercise.targetMuscle || 'Genel'
+  const [muscle, setMuscle] = useState(initialMuscle)
+  // Listede olmayan eski bir değer (ör. 'Legs') seçili kalabilsin.
+  const muscleOptions = MUSCLE_GROUPS.includes(initialMuscle) ? MUSCLE_GROUPS : [initialMuscle, ...MUSCLE_GROUPS]
   const [confirming, setConfirming] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -72,6 +77,8 @@ export default function ExerciseSettingsModal({ exercise, onSave, onDelete, onCl
     if (!name.trim()) return
     const patch = { name: name.trim(), repMin, repMax, restSeconds }
     if (isBarbell) patch.barWeight = barWeight
+    // Değiştiyse aynı isimli tüm kopyalara ve kişisel havuza da yansır (updateExercise).
+    if (muscle !== initialMuscle) patch.targetMuscle = muscle
     run(() => onSave(patch))
   }
 
@@ -120,6 +127,23 @@ export default function ExerciseSettingsModal({ exercise, onSave, onDelete, onCl
                 onChange={(e) => setName(e.target.value)}
                 className="h-12 w-full rounded-2xl border border-slate-800 bg-slate-950 px-4 text-base font-semibold text-white outline-none ring-emerald-500 focus:ring-2"
               />
+            </div>
+
+            <div>
+              <label htmlFor="ex-muscle" className="mb-1 block text-sm font-medium text-slate-400">Kas grubu</label>
+              <select
+                id="ex-muscle"
+                value={muscle}
+                onChange={(e) => setMuscle(e.target.value)}
+                className="h-12 w-full appearance-none rounded-2xl border border-slate-800 bg-slate-950 px-4 text-base font-semibold text-white outline-none ring-emerald-500 focus:ring-2"
+              >
+                {muscleOptions.map((group) => (
+                  <option key={group} value={group}>
+                    {group}
+                  </option>
+                ))}
+              </select>
+              <p className="mt-1 text-xs text-slate-500">Bu hareketin tüm günlerdeki kopyalarına ve havuzdaki kaydına uygulanır.</p>
             </div>
 
             <div>

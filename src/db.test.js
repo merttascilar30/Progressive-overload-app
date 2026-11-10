@@ -351,3 +351,27 @@ describe('bestBefore', () => {
     expect(best.has(2)).toBe(false)
   })
 })
+
+describe('updateExercise targetMuscle', () => {
+  test('applies the muscle group to same-name exercises in every day and to the personal pool', async () => {
+    const push = await addRoutine('Push')
+    const pull = await addRoutine('Pull')
+    const a = await addExercise({ name: 'Uzanarak Cable Biceps Curl', routineId: push })
+    const b = await addExercise({ name: 'uzanarak cable biceps curl ', routineId: pull })
+    const other = await addExercise({ name: 'Rope Pushdown', routineId: push })
+    await upsertCustomPoolItem({ name: 'Uzanarak Cable Biceps Curl', targetMuscle: 'Genel' })
+
+    await updateExercise(a, { targetMuscle: 'Biceps' })
+
+    expect((await db.exercises.get(a)).targetMuscle).toBe('Biceps')
+    expect((await db.exercises.get(b)).targetMuscle).toBe('Biceps')
+    expect((await db.exercises.get(other)).targetMuscle).toBe('Genel')
+    expect((await listCustomPool())[0].targetMuscle).toBe('Biceps')
+  })
+
+  test('rejects an empty muscle group', async () => {
+    const push = await addRoutine('Push')
+    const a = await addExercise({ name: 'Fly', routineId: push })
+    await expect(updateExercise(a, { targetMuscle: '  ' })).rejects.toThrow('Kas grubu boş olamaz.')
+  })
+})
